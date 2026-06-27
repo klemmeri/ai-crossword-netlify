@@ -29,11 +29,11 @@ exports.handler = async (event) => {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return json(500, {
-      error: 'ANTHROPIC_API_KEY is not set in Netlify environment variables. Add it in Netlify: Site configuration -> Environment variables.'
+      error: 'ANTHROPIC_API_KEY is not set in Netlify environment variables.'
     });
   }
 
-  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+  const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
   let lastError = 'Unknown validation failure.';
 
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -99,52 +99,42 @@ function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool, attem
 }
 
 function buildPrompt({ theme, difficulty, size, wordPool, attempt, lastError }) {
-  const correction = attempt > 1 ? `\nYour previous attempt failed: ${lastError}\nFix these issues and return a corrected puzzle.` : '';
+  const correction = attempt > 1 ? `\nYour previous attempt failed: ${lastError}\nFix these issues.` : '';
 
   return `Create a 15x15 American newspaper-style crossword puzzle about: ${theme}
 Difficulty: ${difficulty}
 
-GRID RULES — follow exactly:
-- The "grid" array must have exactly 15 strings.
-- Each string must be exactly 15 characters.
-- Use ONLY uppercase A-Z letters for white cells and # for black squares.
-- Black squares must be symmetric: if row R col C is #, then row (14-R) col (14-C) must also be #.
-- Aim for about 38-42 black squares total.
-- No answer shorter than 3 letters (no isolated 1- or 2-letter white runs).
-- All white cells must connect to each other.
+CRITICAL GRID RULES:
+- The "grid" array must have EXACTLY 15 strings.
+- Each string must be EXACTLY 15 characters. Count every character.
+- Use ONLY uppercase A-Z for white cells and # for black squares.
+- Black squares must be rotationally symmetric.
+- Aim for 38-42 black squares.
+- No answer shorter than 3 letters.
+- All white cells must connect.
 
 CLUE RULES:
-- Every answer that appears in the grid must have a clue.
-- The "clues" object keys must be the EXACT answer string as it appears in the grid.
-- For example if the grid contains the word STORM, the clues object must have "STORM": "some clue".
-- ${difficulty === 'easy' ? 'Use simple, direct definitions.' : difficulty === 'hard' ? 'Use wordplay, misdirection, and clever cluing.' : 'Use moderately indirect clues.'}
+- The "clues" object keys must EXACTLY match the answer words in the grid.
+- Provide a clue for every answer word.
 
-EXAMPLE of correct format (5x5 shown, yours must be 15x15):
+IMPORTANT — each row below is exactly 15 characters, use this as your guide:
+123456789012345  <- 15 chars
+###ABCDEFGH###  <- 15 chars (count: 3+8+3=14, WRONG)
+###ABCDEFGHI##  <- 15 chars (count: 3+9+2=14, WRONG)  
+####ABCDEFGH##  <- 15 chars (count: 4+8+2=14, WRONG)
+###ABCDEFGHIJ#  <- 15 chars (count: 3+10+1=14, WRONG)
+ABCDEFGHIJKLMNO <- 15 chars (count: 15, CORRECT)
+##ABCDEFGHIJK##  <- 15 chars (count: 2+11+2=15, CORRECT)
+
+Return this exact JSON:
 {
-  "title": "Mini Weather",
-  "grid": [
-    "STORM",
-    "HOSES",
-    "AVERT",
-    "DENSE",
-    "ESSAYS"
-  ],
-  "clues": {
-    "STORM": "Tempest",
-    "HOSES": "Garden watering tools",
-    "AVERT": "Prevent",
-    "DENSE": "Thick",
-    "ESSAYS": "Written compositions",
-    "SHA": "Quiet!",
-    "OVE": "Above, poetically",
-    "RES": "Legal matters",
-    "STS": "Map abbr.",
-    "MADE": "Created"
-  },
-  "themeEntries": ["STORM"]
+  "title": "string",
+  "grid": ["row1of15chars__", "row2of15chars__", "row3of15chars__", "row4of15chars__", "row5of15chars__", "row6of15chars__", "row7of15chars__", "row8of15chars__", "row9of15chars__", "row10of15chars_", "row11of15chars_", "row12of15chars_", "row13of15chars_", "row14of15chars_", "row15of15chars_"],
+  "clues": { "ANSWER": "clue text" },
+  "themeEntries": ["ANSWER"]
 }
 
-Now create the full 15x15 version about "${theme}". Return JSON only.${correction}`;
+Now write the real puzzle. Double-check every row is exactly 15 characters before returning.${correction}`;
 }
 
 function extractJson(text) {
@@ -162,8 +152,12 @@ function extractJson(text) {
 
 function normalizePuzzle(raw, defaults) {
   const grid = Array.isArray(raw.grid)
-    ? raw.grid.map(row => { const r = String(row).toUpperCase().replace(/[^A-Z#]/g, '').slice(0, defaults.size); return r.padEnd(defaults.size, '#'); })
+    ? raw.grid.map(row => {
+        const r = String(row).toUpperCase().replace(/[^A-Z#]/g, '').slice(0, defaults.size);
+        return r.padEnd(defaults.size, '#');
+      })
     : [];
+
   const clues = (raw.clues && typeof raw.clues === 'object') ? raw.clues : {};
   const cleanClues = {};
   for (const [k, v] of Object.entries(clues)) {
