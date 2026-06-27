@@ -5,5 +5,6 @@
 [functions]
   node_bundler = "nft"
 
+# Sonnet on Medium/Hard needs more headroom; Haiku on Easy is fast
 [functions."generate-puzzle"]
-  timeout = 30
+  timeout = 26
