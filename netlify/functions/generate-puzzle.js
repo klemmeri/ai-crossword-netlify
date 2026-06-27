@@ -6,7 +6,7 @@ const https = require('https');
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
-exports.handler = async (event) => {
+exports.handler = async (event) => {f
   if (event.httpMethod !== 'POST') {
     return json(405, { error: 'Use POST.' });
   }
@@ -179,14 +179,10 @@ function validatePuzzle(puzzle) {
   }
   if (errors.length) return { ok: false, errors };
 
-  let blockCount = 0;
+ let blockCount = 0;
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
-      const a = puzzle.grid[r][c];
-      const b = puzzle.grid[n - 1 - r][n - 1 - c];
-      if (a === '#') blockCount++;
-      if ((a === '#') !== (b === '#'))
-        errors.push(`Symmetry fails at row ${r + 1}, col ${c + 1}.`);
+      if (puzzle.grid[r][c] === '#') blockCount++;
     }
   }
 
