@@ -33,7 +33,7 @@ exports.handler = async (event) => {
     });
   }
 
-  const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
   let lastError = 'Unknown validation failure.';
 
   for (let attempt = 1; attempt <= 2; attempt++) {
