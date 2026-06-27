@@ -33,7 +33,7 @@ exports.handler = async (event) => {
     });
   }
 
-  const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5';
   let lastError = 'Unknown validation failure.';
 
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -64,7 +64,7 @@ function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool, attem
   const prompt = buildPrompt({ theme, difficulty, size, wordPool, attempt, lastError });
   const requestBody = JSON.stringify({
     model,
-    max_tokens: 6000,
+    max_tokens: 3000,
     system: 'You are a professional American crossword constructor. Return only valid JSON — no markdown, no explanation, no code fences.',
     messages: [{ role: 'user', content: prompt }]
   });
