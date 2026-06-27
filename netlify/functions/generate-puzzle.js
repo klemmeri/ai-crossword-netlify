@@ -46,21 +46,19 @@ exports.handler = async (event) => {
     return json(422, { error: `Could not parse grid: ${gridParsed.error}` });
   }
 
-  // Normalize the grid
   let grid = normalizeGrid(gridParsed.data.grid || []);
   const title = cleanText(gridParsed.data.title || `${titleCase(theme)} Crossword`).slice(0, 80);
   const themeEntries = Array.isArray(gridParsed.data.themeEntries)
     ? gridParsed.data.themeEntries.map(sanitizeAnswer).filter(Boolean)
     : [];
 
-  // Extract all answer words from the grid
   const entries = extractEntries(grid);
   if (entries.length === 0) {
     return json(422, { error: 'Grid generated no valid entries.' });
   }
 
   // ── PASS 2: Generate clues for all answers ───────────────────
-  const allAnswers = [...new Set(entries.map(e => e.answer))]; // unique answers
+  const allAnswers = [...new Set(entries.map(e => e.answer))];
   let clueText;
   try {
     clueText = await callAnthropic(apiKey, model, buildCluesPrompt({ theme, difficulty, answers: allAnswers }));
@@ -70,15 +68,13 @@ exports.handler = async (event) => {
 
   const cluesParsed = extractJson(clueText);
   const rawClues = (cluesParsed.ok && cluesParsed.data && typeof cluesParsed.data === 'object')
-    ? cluesParsed.data
-    : {};
+    ? cluesParsed.data : {};
 
   const cleanClues = {};
   for (const [k, v] of Object.entries(rawClues)) {
     cleanClues[sanitizeAnswer(k)] = cleanText(v).slice(0, 220);
   }
 
-  // ── Build final puzzle ───────────────────────────────────────
   const across = [], down = [];
   let blockCount = 0;
   for (const row of grid) for (const ch of row) if (ch === '#') blockCount++;
@@ -89,28 +85,17 @@ exports.handler = async (event) => {
     if (entry.direction === 'Across') across.push(out); else down.push(out);
   }
 
-  const unchecked = countUnchecked(grid);
-
   return json(200, {
-    title,
-    size: 15,
-    difficulty,
-    theme,
-    grid,
-    across,
-    down,
-    themeEntries,
+    title, size: 15, difficulty, theme, grid, across, down, themeEntries,
     quality: {
       entryCount: entries.length,
       blockCount,
       rotationalSymmetry: true,
-      allWhiteCellsChecked: unchecked === 0,
+      allWhiteCellsChecked: countUnchecked(grid) === 0,
       connected: true
     }
   });
 };
-
-// ── API call ─────────────────────────────────────────────────────
 
 function callAnthropic(apiKey, model, prompt) {
   const requestBody = JSON.stringify({
@@ -149,70 +134,70 @@ function callAnthropic(apiKey, model, prompt) {
   });
 }
 
-// ── Prompts ──────────────────────────────────────────────────────
-
 function buildGridPrompt({ theme, difficulty }) {
-  return `Create a 15x15 American newspaper-style crossword grid about: ${theme}
+  return `Create a 15x15 American newspaper crossword grid about: ${theme}
 Difficulty: ${difficulty}
 
+MOST IMPORTANT RULE: Every answer must be a real English word or common phrase that appears in a dictionary. No random letter strings. No partial words. No abbreviations unless they are extremely common (ERA, FDA, NBA).
+
 GRID RULES:
-- EXACTLY 15 rows, each EXACTLY 15 characters.
-- Use uppercase A-Z for white cells, # for black squares only.
-- Black squares must be rotationally symmetric.
-- Use NO MORE THAN 40 black squares total — keep the grid open and airy.
-- Every white cell must cross both an Across AND a Down word of 3+ letters.
+- EXACTLY 15 rows, each EXACTLY 15 characters long.
+- Use uppercase A-Z for letters, # for black squares.
+- Black squares must have 180-degree rotational symmetry.
+- Maximum 40 black squares — keep the grid mostly white/open.
+- Every white cell must be part of BOTH an Across word AND a Down word, each 3+ letters.
 - No word shorter than 3 letters.
-- Use only real English words that can be clued — no random letter strings.
-- Include 4-6 theme-related words about "${theme}".
 
-Return ONLY this JSON (no clues needed — just the grid):
+HOW TO BUILD THE GRID:
+1. Start with 6-8 long theme words related to "${theme}" (7-15 letters each).
+2. Place them in the grid horizontally and vertically so they interlock.
+3. Fill remaining white cells with short common English words (ACE, ERA, ORE, ATE, etc.).
+4. Add # black squares between words where needed.
+5. Make sure every letter is crossed by both an Across and Down word.
+
+Good short fill words to use: ACE, AGE, AID, AIM, AIR, ALE, ANT, APE, APT, ARC, ARE, ARK, ARM, ART, ASH, ASK, ATE, AWE, AXE, DAM, DEN, DEW, DIM, DIP, DOE, DOG, DUE, DUG, DYE, EAR, EAT, EEL, EGG, ELK, ELM, EMU, END, ERA, EVE, EWE, FAD, FAN, FAR, FED, FEW, FIG, FIN, FIT, FLY, FOB, FOE, FOG, FOP, FOR, FOX, FRY, FUR, GEL, GEM, GIN, GNU, GOT, GUM, GUT, GUY, GYM, HAD, HAM, HAS, HAT, HAY, HEN, HEW, HID, HIM, HIP, HIT, HOB, HOD, HOG, HOP, HOT, HOW, HUB, HUE, HUG, HUM, HUT, ICE, ILL, IMP, INK, INN, ION, IRE, IRK, JAB, JAG, JAM, JAR, JAW, JAY, JET, JIG, JOB, JOG, JOT, JOY, JUG, JUT, KEG, KIT, LAB, LAD, LAG, LAP, LAW, LAX, LAY, LED, LEG, LET, LID, LIP, LIT, LOG, LOT, LOW, OAK, OAR, OAT, ODD, ODE, OFT, OHM, OIL, OLD, ORB, ORE, OWE, OWL, OWN, PAD, PAL, PAN, PAP, PAR, PAT, PAW, PAY, PEA, PEG, PEN, PEP, PET, PEW, PIE, PIG, PIN, PIT, PLY, POD, POI, POP, POT, POW, PRY, PUB, PUG, PUN, PUP, PUS, PUT, RAN, RAP, RAT, RAW, RAY, RED, RIB, RID, RIG, RIM, RIP, ROB, ROD, ROE, ROT, ROW, RUB, RUG, RUM, RUN, RUT, RYE, SAC, SAG, SAP, SAT, SAW, SAY, SEA, SET, SEW, SHE, SHY, SIN, SIP, SIR, SIT, SKI, SKY, SLY, SOB, SOD, SOT, SOW, SOY, SPA, SPY, STY, SUB, SUM, SUN, SUP, TAB, TAD, TAN, TAP, TAR, TAT, TAX, TEA, TEN, THE, TIE, TIN, TIP, TOD, TOE, TON, TOP, TOT, TOW, TOY, TUB, TUG, TUN, TUP, TUT, TWO, UDO, UGH, URN, VAN, VAT, VET, VIA, VIE, VOW, WAD, WAG, WAR, WAS, WAX, WEB, WED, WIG, WIT, WOE, WOK, WON, WOO, WOP, WOW, YAM, YAP, YAW, YEA, YEW, YOB, YOD, YOK, YOU, ZAP, ZEN, ZIP, ZIT, ZOO
+
+Return ONLY this JSON:
 {
-  "title": "Puzzle title here",
+  "title": "Puzzle title",
   "grid": [
-    "STORM##RAINFALL",
-    "HURRICANE#CLOUD",
-    "...13 more rows of exactly 15 chars..."
+    "THUNDERSTORM###",
+    "H#U#E#####R###A",
+    "...13 more rows..."
   ],
-  "themeEntries": ["STORM", "RAINFALL", "HURRICANE", "CLOUD"]
-}
-
-Every row must be exactly 15 characters. Use only real words.`;
+  "themeEntries": ["THUNDERSTORM"]
+}`;
 }
 
 function buildCluesPrompt({ theme, difficulty, answers }) {
   const diffGuide = difficulty === 'easy'
-    ? 'Use simple, direct definitions that any adult would know.'
+    ? 'Simple, direct definitions that any adult would know immediately.'
     : difficulty === 'hard'
-    ? 'Use wordplay, double meanings, and misdirection.'
-    : 'Use clear but moderately indirect clues.';
+    ? 'Clever wordplay, double meanings, and misdirection.'
+    : 'Clear but moderately indirect clues.';
 
   const answerList = answers.map(a => `"${a}"`).join(', ');
 
-  return `Write crossword puzzle clues for these answer words from a "${theme}" themed puzzle.
+  return `Write crossword clues for these answer words. The puzzle theme is "${theme}".
 Difficulty: ${difficulty} — ${diffGuide}
 
-Answer words: ${answerList}
+Answers: ${answerList}
 
-Instructions:
-- Write one clue for EVERY word listed above. Do not skip any.
-- Every clue must be different — no duplicate clues.
-- Keep each clue under 8 words.
-- Do not use the answer word in its own clue.
-- For short common words (ERA, NET, ACE, ONE, etc.), write standard crossword clues like "Historical period", "Tennis barrier", "Serves perfectly", "Single".
-- For theme-related words, reference "${theme}" in the clue when natural.
-- Never write clues like "letter fragment", "scrambled letters", or "abbreviation" — always give a real meaningful clue.
+Rules:
+- Write one genuine crossword clue for EVERY word above. No exceptions.
+- Every clue must be unique — no two answers get the same clue.
+- Each clue should be 2-7 words long.
+- Do NOT use the answer word inside the clue.
+- Write real, meaningful clues. Never write things like "word fragment", "scrambled letters", "minus a letter", "without the X", or "abbreviation".
+- For short words: ACE = "Serve winner", ERA = "Time period", ORE = "Mined material", NET = "After taxes", ATE = "Had a meal", DEW = "Morning droplets", FOG = "Thick mist", ICE = "Frozen water", SKY = "Above the clouds", SUN = "Daytime star", AIR = "What we breathe", etc.
+- For theme words about "${theme}", write clues related to that theme.
 
-Return ONLY a JSON object with every answer as a key:
+Return ONLY a JSON object:
 {
-  "STORM": "Violent weather disturbance",
-  "ERA": "Historical period",
-  "NET": "Tennis court divider",
-  "ACE": "Serve that wins the point",
-  ... one entry for every answer word ...
+  "WORD": "Its clue here",
+  "ANOTHER": "Its clue here"
 }`;
 }
-
-// ── Grid helpers ─────────────────────────────────────────────────
 
 function normalizeGrid(rawGrid) {
   let grid = Array.isArray(rawGrid)
@@ -223,7 +208,6 @@ function normalizeGrid(rawGrid) {
     : [];
   while (grid.length < 15) grid.push('###############');
 
-  // Enforce rotational symmetry
   for (let r = 0; r < 15; r++) {
     for (let c = 0; c < 15; c++) {
       if (grid[r][c] === '#' || grid[14-r][14-c] === '#') {
@@ -232,7 +216,6 @@ function normalizeGrid(rawGrid) {
       }
     }
   }
-
   return grid;
 }
 
@@ -309,32 +292,63 @@ function extractJson(text) {
 
 function fallbackClue(answer, difficulty) {
   const common = {
-    'THE': 'Definite article', 'AND': 'Plus', 'FOR': 'In favor of',
-    'ARE': 'Exist', 'BUT': 'However', 'NOT': 'Negation word',
-    'YOU': 'Second person', 'ALL': 'Everything', 'CAN': 'Is able to',
-    'HER': 'Belonging to her', 'WAS': 'Past tense of be',
-    'ONE': 'Single', 'OUR': 'Belonging to us', 'OUT': 'Not in',
-    'DAY': 'Twenty-four hours', 'GET': 'Obtain', 'HAS': 'Possesses',
-    'HIM': 'Male pronoun', 'HIS': 'Male possessive', 'HOW': 'In what way',
-    'ITS': 'Belonging to it', 'NEW': 'Not old', 'NOW': 'At this moment',
-    'OLD': 'Not new', 'SEE': 'Observe', 'TWO': 'One plus one',
-    'WHO': 'Which person', 'BOY': 'Young male', 'DID': 'Past of do',
-    'ITS': 'Possessive pronoun', 'LET': 'Allow', 'PUT': 'Place',
-    'SAY': 'Utter', 'SHE': 'Female pronoun', 'TOO': 'Also',
-    'USE': 'Employ', 'WAY': 'Path or method', 'ACE': 'Tennis winner',
-    'ERA': 'Historical period', 'NET': 'After deductions',
-    'ORE': 'Mined mineral', 'ATE': 'Consumed food', 'EAT': 'Consume',
-    'ICE': 'Frozen water', 'SKY': 'Above the clouds',
-    'SUN': 'Star at center of solar system', 'AIR': 'What we breathe',
-    'FOG': 'Low-lying cloud', 'DEW': 'Morning moisture',
-    'ELM': 'Shade tree', 'OAK': 'Acorn producer',
-    'APE': 'Large primate', 'ANT': 'Picnic pest',
-    'EEL': 'Slippery fish', 'EMU': 'Australian bird',
+    ACE:'Serve winner', AGE:'Time of life', AID:'Give help', AIR:'What we breathe',
+    ALE:'Pub drink', ANT:'Picnic pest', APE:'Large primate', ARC:'Curved line',
+    ARE:'Exist', ARK:"Noah's vessel", ARM:'Limb or weapon', ART:'Creative work',
+    ASH:'Fire remains', ATE:'Had a meal', AWE:'Deep wonder', AXE:'Chopping tool',
+    DAM:'River barrier', DEW:'Morning droplets', DIM:'Not bright', DUE:'Owed',
+    EAR:'Hearing organ', EAT:'Consume food', EEL:'Slippery fish', ELK:'Large deer',
+    ELM:'Shade tree', EMU:'Australian bird', END:'Finish', ERA:'Time period',
+    EVE:'Day before', EWE:'Female sheep', FAD:'Brief craze', FAN:'Admirer',
+    FAR:'Distant', FEW:'Not many', FIG:'Sweet fruit', FIT:'In good shape',
+    FOG:'Thick mist', FOX:'Sly animal', FUR:'Animal coat', GEL:'Hair product',
+    GEM:'Precious stone', GIN:'Clear spirit', GNU:'African beast', GUM:'Chewing treat',
+    GUY:'Fellow', GYM:'Workout place', HAM:'Cured pork', HAT:'Head covering',
+    HAY:'Dried grass', HEN:'Female chicken', HEW:'Chop with axe', HIP:'Trendy',
+    HIT:'Strike', HOG:'Pig', HOP:'Small jump', HOT:'Very warm',
+    HUE:'Color shade', HUG:'Warm embrace', HUM:'Low drone', HUT:'Small shelter',
+    ICE:'Frozen water', ILL:'Not well', INK:'Writing fluid', INN:'Small hotel',
+    IRE:'Anger', JAB:'Quick punch', JAM:'Fruit preserve', JAR:'Glass container',
+    JAW:'Mouth bone', JAY:'Blue bird', JET:'Fast plane', JOG:'Slow run',
+    JOY:'Great happiness', JUG:'Liquid container', KEG:'Small barrel', KIT:'Tool set',
+    LAD:'Young boy', LAP:'Seated surface', LAW:'Legal rule', LAY:'Put down',
+    LED:'Guided', LEG:'Limb', LID:'Cover', LOG:'Wooden chunk',
+    LOW:'Not high', OAK:'Acorn tree', OAR:'Rowing paddle', OAT:'Breakfast grain',
+    ODD:'Strange', ODE:'Lyric poem', OIL:'Lubricant', OLD:'Not young',
+    ORE:'Mined material', OWE:'Be in debt', OWL:'Night bird', PAD:'Writing tablet',
+    PAN:'Cooking vessel', PAR:'Golf standard', PAW:'Animal foot', PEA:'Green vegetable',
+    PEG:'Clothes pin', PEN:'Writing tool', PET:'Cherished animal', PIE:'Baked dish',
+    PIG:'Farm animal', PIN:'Sharp fastener', PIT:'Deep hole', POD:'Seed case',
+    POT:'Cooking container', PUN:'Word joke', PUP:'Young dog', PUT:'Place',
+    RAN:'Past of run', RAP:'Knock or music', RAT:'Rodent', RAW:'Uncooked',
+    RAY:'Beam of light', RED:'Primary color', RIB:'Chest bone', RID:'Free from',
+    RIG:'Equipment', RIM:'Edge or border', RIP:'Tear apart', ROD:'Thin stick',
+    ROE:'Fish eggs', ROT:'Decay', ROW:'Line or dispute', RUG:'Floor covering',
+    RUM:'Caribbean spirit', RUN:'Move fast', RYE:'Bread grain', SAP:'Tree fluid',
+    SAT:'Was seated', SAW:'Cutting tool', SEA:'Ocean', SET:'Group',
+    SKI:'Snow glide', SKY:'Above clouds', SOD:'Grass turf', SOW:'Plant seeds',
+    SPA:'Relaxation place', STY:'Pig pen', SUM:'Total', SUN:'Daytime star',
+    TAB:'Running total', TAN:'Brown color', TAP:'Light knock', TAR:'Road material',
+    TAX:'Government levy', TEA:'Hot drink', TEN:'Number after nine', TIE:'Neck wear',
+    TIN:'Metal container', TIP:'Useful hint', TOE:'Foot digit', TON:'Heavy weight',
+    TOP:'Highest point', TOY:'Plaything', TUB:'Bathing vessel', TUG:'Pull hard',
+    URN:'Vase', VAN:'Delivery vehicle', VAT:'Large tub', VET:'Animal doctor',
+    VOW:'Solemn promise', WAR:'Armed conflict', WAX:'Candle material', WEB:'Spider creation',
+    WED:'Get married', WIG:'Hair piece', WIT:'Clever humor', WOE:'Great sorrow',
+    YAM:'Sweet potato', YEW:'Evergreen tree', ZEN:'Calm mindset', ZIP:'Move fast',
+    ZOO:'Animal park', NET:'After taxes', ACT:'Do something', AGO:'In the past',
+    AID:'Assistance', AIM:'Take aim', AND:'Plus', ANT:'Colony insect',
+    ANY:'Whatever', APT:'Fitting', BIG:'Large', BOW:'Front of ship',
+    BUN:'Hair style', BUS:'Public transport', BUT:'However', BYE:'Farewell',
+    CAB:'Taxi', CAP:'Hat', CAR:'Vehicle', COP:'Officer',
+    CUB:'Young bear', CUP:'Drinking vessel', CUR:'Mongrel dog', CUT:'Slice',
+    DAB:'Light touch', DIG:'Excavate', DIP:'Brief plunge', DOE:'Female deer',
+    DOG:'Man\'s best friend', DUG:'Excavated', DYE:'Color fabric',
   };
   if (common[answer]) return common[answer];
-  if (difficulty === 'hard') return `Tricky entry (${answer.length} letters)`;
-  if (difficulty === 'medium') return `${answer.length}-letter word`;
-  return `${answer.length} letters`;
+  if (difficulty === 'hard') return `Cryptic entry (${answer.length} letters)`;
+  if (difficulty === 'medium') return `Fill-in (${answer.length} letters)`;
+  return `${answer.length}-letter answer`;
 }
 
 function sanitizeAnswer(value) { return String(value || '').toUpperCase().replace(/[^A-Z]/g, ''); }
