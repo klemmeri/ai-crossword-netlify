@@ -31,7 +31,7 @@ exports.handler = async (event) => {
     return json(500, { error: 'ANTHROPIC_API_KEY is not set in Netlify environment variables.' });
   }
 
-  const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
 
   let aiText;
   try {
