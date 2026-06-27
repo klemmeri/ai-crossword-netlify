@@ -1,0 +1,14 @@
+{
+  "name": "ai-newspaper-crossword",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Netlify-hosted AI newspaper-style crossword prototype",
+  "scripts": {
+    "dev": "netlify dev",
+    "zip": "cd .. && zip -r ai-crossword-netlify.zip ai-crossword-netlify -x 'ai-crossword-netlify/node_modules/*'"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "netlify-cli": "latest"
+  }
+}

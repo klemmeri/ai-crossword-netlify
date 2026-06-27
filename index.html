@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Newspaper Crossword Generator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <p class="eyebrow">Prototype v0.1</p>
+      <h1>AI Newspaper-Style Crossword Generator</h1>
+      <p class="lede">Enter a theme or genre. The app asks AI to construct a 15×15 American-style crossword with rotational symmetry, checked letters, and clues tuned by difficulty.</p>
+    </section>
+
+    <section class="panel controls" aria-labelledby="setup-title">
+      <h2 id="setup-title">Puzzle setup</h2>
+      <label for="theme">Theme or genre</label>
+      <textarea id="theme" rows="3" placeholder="Examples: 1970s rock music, weather and climate, classic movies, Pacific islands">weather and climate</textarea>
+
+      <div class="difficulty" role="group" aria-label="Difficulty">
+        <button class="pill selected" data-difficulty="easy" type="button">Easy</button>
+        <button class="pill" data-difficulty="medium" type="button">Medium</button>
+        <button class="pill" data-difficulty="hard" type="button">Hard</button>
+      </div>
+
+      <div class="row2">
+        <label>
+          Grid size
+          <select id="size">
+            <option value="15" selected>15 × 15</option>
+          </select>
+        </label>
+        <label>
+          AI theme pool
+          <input id="wordPool" type="number" min="40" max="120" step="10" value="80" />
+        </label>
+      </div>
+
+      <button id="generate" class="primary" type="button">Generate crossword</button>
+      <p id="status" class="status" role="status">Ready.</p>
+    </section>
+
+    <section id="result" class="result hidden">
+      <div class="titlebar">
+        <div>
+          <p class="eyebrow">Generated puzzle</p>
+          <h2 id="puzzle-title"></h2>
+        </div>
+        <div class="toolrow">
+          <button id="check" type="button">Check</button>
+          <button id="revealLetter" type="button">Reveal letter</button>
+          <button id="revealPuzzle" type="button">Reveal puzzle</button>
+          <button id="print" type="button">Print</button>
+        </div>
+      </div>
+
+      <div class="meta" id="quality"></div>
+      <div class="workspace">
+        <div id="grid" class="grid" aria-label="Crossword grid"></div>
+        <div class="clues">
+          <section>
+            <h3>Across</h3>
+            <ol id="across"></ol>
+          </section>
+          <section>
+            <h3>Down</h3>
+            <ol id="down"></ol>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
