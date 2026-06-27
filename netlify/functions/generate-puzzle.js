@@ -97,43 +97,46 @@ function buildPrompt({ theme, difficulty }) {
   return `Create a 15x15 American newspaper-style crossword puzzle about: ${theme}
 Difficulty: ${difficulty}
 
-GRID RULES (follow exactly):
-1. "grid" must have EXACTLY 15 strings, each EXACTLY 15 characters.
-2. Use uppercase A-Z for white cells, # for black squares.
-3. Black squares must be rotationally symmetric.
-4. EVERY white cell must be part of BOTH an Across word AND a Down word (no isolated cells).
-5. Every word must be at least 3 letters long.
-6. No single white cells surrounded by black squares on all sides.
+GRID APPEARANCE — very important:
+- A standard newspaper crossword has mostly WHITE cells with scattered black squares.
+- Use NO MORE THAN 38 black squares total (about 17% of the grid).
+- Black squares should be spread evenly — NEVER create large black regions or touching blocks.
+- Black squares typically appear as single isolated squares or pairs, not clusters.
+- The grid should look open and airy, not dark and blocked.
 
-HOW TO AVOID UNCHECKED CELLS:
-- Before placing a black square, check that it won't create a white cell with no crossing word.
-- Every column of white cells must be at least 3 cells tall.
-- Every row of white cells must be at least 3 cells wide.
-- Place black squares in clusters or pairs, never isolating single cells.
+GRID RULES:
+- EXACTLY 15 rows, each EXACTLY 15 characters.
+- Use uppercase A-Z for white cells, # for black squares only.
+- Black squares must be rotationally symmetric.
+- Every white cell must cross both an Across AND a Down word of 3+ letters.
+- No word shorter than 3 letters.
 
-CLUES (very important):
-- List EVERY answer word in the "clues" object — both Across AND Down words.
-- Key = exact uppercase answer word, Value = clue text.
+CLUES — critical:
+- You MUST provide a clue for EVERY answer in the grid, both Across and Down.
+- Do not skip any answers. If there are 70 answers, there must be 70 clues.
+- Key = exact uppercase answer word. Value = clue text.
 - ${diffGuide}
+
+Here is an example of a good open grid pattern (use # sparingly):
+"FROSTBITEWINDS"  <- mostly letters
+"R##A##I##N##C#"  <- scattered single #
+"EATHER#CLIMATE"  <- open runs of letters
 
 Return ONLY this JSON:
 {
   "title": "Puzzle title",
   "grid": [
-    "###WEATHER####",
-    "##RAIN#CLOUD##",
-    ...13 more rows...
+    "ABCDE#FGHIJ#KLM",
+    "N#OPQ#RSTUV#WXY",
+    ... 13 more rows of exactly 15 chars ...
   ],
   "clues": {
-    "WEATHER": "Atmospheric conditions",
-    "RAIN": "Precipitation",
-    "CLOUD": "Water vapor formation",
-    ... ALL other answers ...
+    "EVERY": "clue for every answer",
+    "SINGLE": "clue for single",
+    "ANSWER": "clue for answer"
   },
-  "themeEntries": ["WEATHER", "RAIN"]
-}
-
-Every row must be exactly 15 characters. Count carefully.`;
+  "themeEntries": ["THEME", "WORDS"]
+}`;
 }
 
 function extractJson(text) {
@@ -153,7 +156,7 @@ function extractJson(text) {
 }
 
 function buildPuzzle(raw, defaults) {
-  // Step 1: Normalize grid rows to exactly 15 chars
+  // Normalize grid
   let grid = Array.isArray(raw.grid)
     ? raw.grid.slice(0, 15).map(row => {
         const r = String(row).toUpperCase().replace(/[^A-Z#]/g, '');
@@ -162,19 +165,17 @@ function buildPuzzle(raw, defaults) {
     : [];
   while (grid.length < 15) grid.push('###############');
 
-  // Step 2: Enforce rotational symmetry
+  // Enforce rotational symmetry
   for (let r = 0; r < 15; r++) {
     for (let c = 0; c < 15; c++) {
-      const r2 = 14 - r, c2 = 14 - c;
-      if (grid[r][c] === '#' || grid[r2][c2] === '#') {
-        grid[r] = setChar(grid[r], c, '#');
-        grid[r2] = setChar(grid[r2], c2, '#');
+      if (grid[r][c] === '#' || grid[14-r][14-c] === '#') {
+        grid[r]    = setChar(grid[r],    c,    '#');
+        grid[14-r] = setChar(grid[14-r], 14-c, '#');
       }
     }
   }
 
-  // Step 3: Fix unchecked cells — any white cell not in both an across and down
-  // word of length >= 3 gets blacked out (and its symmetric partner too)
+  // Fix unchecked cells by blacking them out
   let changed = true;
   let passes = 0;
   while (changed && passes < 10) {
@@ -183,27 +184,25 @@ function buildPuzzle(raw, defaults) {
     for (let r = 0; r < 15; r++) {
       for (let c = 0; c < 15; c++) {
         if (grid[r][c] === '#') continue;
-        const aLen = wordLength(grid, r, c, 0, 1) + wordLength(grid, r, c, 0, -1) - 1;
-        const dLen = wordLength(grid, r, c, 1, 0) + wordLength(grid, r, c, -1, 0) - 1;
+        const aLen = runLength(grid, r, c, 0, 1) + runLength(grid, r, c, 0, -1) - 1;
+        const dLen = runLength(grid, r, c, 1, 0) + runLength(grid, r, c, -1, 0) - 1;
         if (aLen < 3 || dLen < 3) {
-          // Black out this cell and its symmetric partner
-          const r2 = 14 - r, c2 = 14 - c;
-          grid[r] = setChar(grid[r], c, '#');
-          grid[r2] = setChar(grid[r2], c2, '#');
+          grid[r]    = setChar(grid[r],    c,    '#');
+          grid[14-r] = setChar(grid[14-r], 14-c, '#');
           changed = true;
         }
       }
     }
   }
 
-  // Step 4: Build clue lookup
+  // Build clue lookup
   const rawClues = (raw.clues && typeof raw.clues === 'object') ? raw.clues : {};
   const cleanClues = {};
   for (const [k, v] of Object.entries(rawClues)) {
     cleanClues[sanitizeAnswer(k)] = cleanText(v).slice(0, 220);
   }
 
-  // Step 5: Extract entries and match clues
+  // Extract entries
   const entries = extractEntries(grid);
   const across = [], down = [];
   let blockCount = 0;
@@ -215,10 +214,7 @@ function buildPuzzle(raw, defaults) {
     if (entry.direction === 'Across') across.push(out); else down.push(out);
   }
 
-  // Check quality
   const unchecked = countUnchecked(grid);
-  const allAnswers = entries.map(e => e.answer);
-  const withClues = allAnswers.filter(a => cleanClues[a]).length;
 
   return {
     title: cleanText(raw.title || `${titleCase(defaults.theme)} Crossword`).slice(0, 80),
@@ -239,13 +235,10 @@ function buildPuzzle(raw, defaults) {
   };
 }
 
-function wordLength(grid, r, c, dr, dc) {
-  let len = 0;
-  let rr = r, cc = c;
+function runLength(grid, r, c, dr, dc) {
+  let len = 0, rr = r, cc = c;
   while (rr >= 0 && rr < 15 && cc >= 0 && cc < 15 && grid[rr][cc] !== '#') {
-    len++;
-    rr += dr;
-    cc += dc;
+    len++; rr += dr; cc += dc;
   }
   return len;
 }
@@ -255,8 +248,8 @@ function countUnchecked(grid) {
   for (let r = 0; r < 15; r++) {
     for (let c = 0; c < 15; c++) {
       if (grid[r][c] === '#') continue;
-      const aLen = wordLength(grid, r, c, 0, 1) + wordLength(grid, r, c, 0, -1) - 1;
-      const dLen = wordLength(grid, r, c, 1, 0) + wordLength(grid, r, c, -1, 0) - 1;
+      const aLen = runLength(grid, r, c, 0, 1) + runLength(grid, r, c, 0, -1) - 1;
+      const dLen = runLength(grid, r, c, 1, 0) + runLength(grid, r, c, -1, 0) - 1;
       if (aLen < 3 || dLen < 3) count++;
     }
   }
