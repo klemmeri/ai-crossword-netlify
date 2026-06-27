@@ -1,5 +1,5 @@
 // generate-puzzle.js — Netlify serverless function
-// Calls Anthropic Claude instead of OpenAI.
+// Two-pass approach: 1) generate grid, 2) generate clues separately
 
 const https = require('https');
 
@@ -33,24 +33,86 @@ exports.handler = async (event) => {
 
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
-  let aiText;
+  // ── PASS 1: Generate the grid ────────────────────────────────
+  let gridText;
   try {
-    aiText = await callAnthropic({ apiKey, model, theme, difficulty, size, wordPool });
+    gridText = await callAnthropic(apiKey, model, buildGridPrompt({ theme, difficulty }));
   } catch (err) {
-    return json(502, { error: `AI service error: ${err.message}` });
+    return json(502, { error: `Grid generation error: ${err.message}` });
   }
 
-  const parsed = extractJson(aiText);
-  if (!parsed.ok) {
-    return json(422, { error: `Could not parse AI response: ${parsed.error}` });
+  const gridParsed = extractJson(gridText);
+  if (!gridParsed.ok) {
+    return json(422, { error: `Could not parse grid: ${gridParsed.error}` });
   }
 
-  const puzzle = buildPuzzle(parsed.data, { theme, difficulty, size });
-  return json(200, puzzle);
+  // Normalize the grid
+  let grid = normalizeGrid(gridParsed.data.grid || []);
+  const title = cleanText(gridParsed.data.title || `${titleCase(theme)} Crossword`).slice(0, 80);
+  const themeEntries = Array.isArray(gridParsed.data.themeEntries)
+    ? gridParsed.data.themeEntries.map(sanitizeAnswer).filter(Boolean)
+    : [];
+
+  // Extract all answer words from the grid
+  const entries = extractEntries(grid);
+  if (entries.length === 0) {
+    return json(422, { error: 'Grid generated no valid entries.' });
+  }
+
+  // ── PASS 2: Generate clues for all answers ───────────────────
+  const allAnswers = entries.map(e => e.answer);
+  let clueText;
+  try {
+    clueText = await callAnthropic(apiKey, model, buildCluesPrompt({ theme, difficulty, answers: allAnswers }));
+  } catch (err) {
+    return json(502, { error: `Clue generation error: ${err.message}` });
+  }
+
+  const cluesParsed = extractJson(clueText);
+  const rawClues = (cluesParsed.ok && cluesParsed.data && typeof cluesParsed.data === 'object')
+    ? cluesParsed.data
+    : {};
+
+  const cleanClues = {};
+  for (const [k, v] of Object.entries(rawClues)) {
+    cleanClues[sanitizeAnswer(k)] = cleanText(v).slice(0, 220);
+  }
+
+  // ── Build final puzzle ───────────────────────────────────────
+  const across = [], down = [];
+  let blockCount = 0;
+  for (const row of grid) for (const ch of row) if (ch === '#') blockCount++;
+
+  for (const entry of entries) {
+    const clue = cleanClues[entry.answer] || fallbackClue(entry.answer, difficulty);
+    const out = { number: entry.number, row: entry.row, col: entry.col, answer: entry.answer, clue };
+    if (entry.direction === 'Across') across.push(out); else down.push(out);
+  }
+
+  const unchecked = countUnchecked(grid);
+
+  return json(200, {
+    title,
+    size: 15,
+    difficulty,
+    theme,
+    grid,
+    across,
+    down,
+    themeEntries,
+    quality: {
+      entryCount: entries.length,
+      blockCount,
+      rotationalSymmetry: true,
+      allWhiteCellsChecked: unchecked === 0,
+      connected: true
+    }
+  });
 };
 
-function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool }) {
-  const prompt = buildPrompt({ theme, difficulty, size, wordPool });
+// ── API call ─────────────────────────────────────────────────────
+
+function callAnthropic(apiKey, model, prompt) {
   const requestBody = JSON.stringify({
     model,
     max_tokens: 4000,
@@ -87,83 +149,81 @@ function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool }) {
   });
 }
 
-function buildPrompt({ theme, difficulty }) {
+// ── Prompts ──────────────────────────────────────────────────────
+
+function buildGridPrompt({ theme, difficulty }) {
+  return `Create a 15x15 American newspaper-style crossword grid about: ${theme}
+Difficulty: ${difficulty}
+
+GRID RULES:
+- EXACTLY 15 rows, each EXACTLY 15 characters.
+- Use uppercase A-Z for white cells, # for black squares only.
+- Black squares must be rotationally symmetric.
+- Use NO MORE THAN 40 black squares total — keep the grid open and airy.
+- Every white cell must cross both an Across AND a Down word of 3+ letters.
+- No word shorter than 3 letters.
+- Include 4-6 theme-related words about "${theme}".
+
+Return ONLY this JSON (no clues needed yet — just the grid):
+{
+  "title": "Puzzle title here",
+  "grid": [
+    "STORM##RAINFALL",
+    "HURRICANE#CLOUD",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO"
+  ],
+  "themeEntries": ["STORM", "RAINFALL", "HURRICANE", "CLOUD"]
+}
+
+Every row must be exactly 15 characters. Count carefully.`;
+}
+
+function buildCluesPrompt({ theme, difficulty, answers }) {
   const diffGuide = difficulty === 'easy'
     ? 'Use simple, direct definitions.'
     : difficulty === 'hard'
     ? 'Use wordplay and misdirection.'
     : 'Use moderately indirect clues.';
 
-  return `Create a 15x15 American newspaper-style crossword puzzle about: ${theme}
-Difficulty: ${difficulty}
+  const answerList = answers.join(', ');
 
-GRID APPEARANCE:
-- Use NO MORE THAN 38 black squares (#). The grid should be mostly white cells with words.
-- Black squares should be spread out as single isolated squares, never in large clusters.
-- A good newspaper crossword looks open and airy with lots of white space.
+  return `Write crossword clues for these answers from a "${theme}" themed puzzle.
+Difficulty: ${difficulty} — ${diffGuide}
 
-GRID RULES:
-- EXACTLY 15 rows, each EXACTLY 15 characters.
-- Use uppercase A-Z for white cells, # for black squares only.
-- Black squares must be rotationally symmetric.
-- Every white cell must cross both an Across AND a Down word of 3+ letters.
-- No word shorter than 3 letters.
+Answers to clue: ${answerList}
 
-CLUES:
-- Provide a clue for EVERY answer — both Across and Down words.
-- Key = exact uppercase answer. Value = clue text.
-- ${diffGuide}
+Rules:
+- Write a clue for EVERY answer listed above. Do not skip any.
+- Keep clues concise (under 10 words each).
+- Do not use the answer word in its own clue.
+- For common words unrelated to the theme, write a general knowledge clue.
 
-Return ONLY this JSON:
+Return ONLY a JSON object where each key is an answer word and the value is its clue:
 {
-  "title": "Puzzle title",
-  "grid": [
-    "ABCDE#FGHIJ#KLM",
-    "N#OPQ#RSTUV#WXY",
-    "ZABCD#EFGHI#JKL",
-    "MNO#PQRSTUVWXY#",
-    "ZABCDEFG#HIJKLM",
-    "#NOPQRST#UVWXYZ",
-    "ABCDE#FGHIJ#KLM",
-    "NOPQR#STUVW#XYZ",
-    "ABCDE#FGHIJ#KLM",
-    "#NOPQRST#UVWXYZ",
-    "ZABCDEFG#HIJKLM",
-    "MNO#PQRSTUVWXY#",
-    "ZABCD#EFGHI#JKL",
-    "N#OPQ#RSTUV#WXY",
-    "ABCDE#FGHIJ#KLM"
-  ],
-  "clues": {
-    "EVERYACROSSWORD": "clue text",
-    "EVERYDOWNWORD": "clue text"
-  },
-  "themeEntries": ["THEME", "WORDS"]
+  "STORM": "Violent weather disturbance",
+  "RAIN": "Precipitation from clouds",
+  "WIND": "Moving air",
+  ... one entry for every answer ...
+}`;
 }
 
-The example grid above shows the FORMAT only — replace every row with real crossword words about "${theme}". Each row must be exactly 15 characters.`;
-}
+// ── Grid helpers ─────────────────────────────────────────────────
 
-function extractJson(text) {
-  if (!text) return { ok: false, error: 'Empty AI response.' };
-  let cleaned = text.replace(/```json|```/gi, '').trim();
-  try { return { ok: true, data: JSON.parse(cleaned) }; } catch {}
-  let depth = 0, start = -1, end = -1;
-  for (let i = 0; i < cleaned.length; i++) {
-    if (cleaned[i] === '{') { if (depth === 0) start = i; depth++; }
-    else if (cleaned[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
-  }
-  if (start >= 0 && end > start) {
-    try { return { ok: true, data: JSON.parse(cleaned.slice(start, end + 1)) }; }
-    catch (err) { return { ok: false, error: `JSON parse failed: ${err.message}` }; }
-  }
-  return { ok: false, error: 'No JSON object found in AI response.' };
-}
-
-function buildPuzzle(raw, defaults) {
-  // Normalize grid
-  let grid = Array.isArray(raw.grid)
-    ? raw.grid.slice(0, 15).map(row => {
+function normalizeGrid(rawGrid) {
+  let grid = Array.isArray(rawGrid)
+    ? rawGrid.slice(0, 15).map(row => {
         const r = String(row).toUpperCase().replace(/[^A-Z#]/g, '');
         return r.length >= 15 ? r.slice(0, 15) : r.padEnd(15, '#');
       })
@@ -180,69 +240,7 @@ function buildPuzzle(raw, defaults) {
     }
   }
 
-  // Build clue lookup
-  const rawClues = (raw.clues && typeof raw.clues === 'object') ? raw.clues : {};
-  const cleanClues = {};
-  for (const [k, v] of Object.entries(rawClues)) {
-    cleanClues[sanitizeAnswer(k)] = cleanText(v).slice(0, 220);
-  }
-
-  // Extract entries and match clues
-  const entries = extractEntries(grid);
-  const across = [], down = [];
-  let blockCount = 0;
-  for (const row of grid) for (const ch of row) if (ch === '#') blockCount++;
-
-  for (const entry of entries) {
-    const clue = cleanClues[entry.answer] || fallbackClue(entry.answer, defaults.difficulty);
-    const out = { number: entry.number, row: entry.row, col: entry.col, answer: entry.answer, clue };
-    if (entry.direction === 'Across') across.push(out); else down.push(out);
-  }
-
-  const unchecked = countUnchecked(grid);
-
-  return {
-    title: cleanText(raw.title || `${titleCase(defaults.theme)} Crossword`).slice(0, 80),
-    size: 15,
-    difficulty: defaults.difficulty,
-    theme: defaults.theme,
-    grid,
-    across,
-    down,
-    themeEntries: Array.isArray(raw.themeEntries) ? raw.themeEntries.map(sanitizeAnswer).filter(Boolean) : [],
-    quality: {
-      entryCount: entries.length,
-      blockCount,
-      rotationalSymmetry: true,
-      allWhiteCellsChecked: unchecked === 0,
-      connected: true
-    }
-  };
-}
-
-function runLength(grid, r, c, dr, dc) {
-  let len = 0, rr = r, cc = c;
-  while (rr >= 0 && rr < 15 && cc >= 0 && cc < 15 && grid[rr][cc] !== '#') {
-    len++; rr += dr; cc += dc;
-  }
-  return len;
-}
-
-function countUnchecked(grid) {
-  let count = 0;
-  for (let r = 0; r < 15; r++) {
-    for (let c = 0; c < 15; c++) {
-      if (grid[r][c] === '#') continue;
-      const aLen = runLength(grid, r, c, 0, 1) + runLength(grid, r, c, 0, -1) - 1;
-      const dLen = runLength(grid, r, c, 1, 0) + runLength(grid, r, c, -1, 0) - 1;
-      if (aLen < 3 || dLen < 3) count++;
-    }
-  }
-  return count;
-}
-
-function setChar(str, idx, ch) {
-  return str.substring(0, idx) + ch + str.substring(idx + 1);
+  return grid;
 }
 
 function extractEntries(grid) {
@@ -273,6 +271,47 @@ function extractEntries(grid) {
     }
   }
   return entries;
+}
+
+function runLength(grid, r, c, dr, dc) {
+  let len = 0, rr = r, cc = c;
+  while (rr >= 0 && rr < 15 && cc >= 0 && cc < 15 && grid[rr][cc] !== '#') {
+    len++; rr += dr; cc += dc;
+  }
+  return len;
+}
+
+function countUnchecked(grid) {
+  let count = 0;
+  for (let r = 0; r < 15; r++) {
+    for (let c = 0; c < 15; c++) {
+      if (grid[r][c] === '#') continue;
+      const aLen = runLength(grid, r, c, 0, 1) + runLength(grid, r, c, 0, -1) - 1;
+      const dLen = runLength(grid, r, c, 1, 0) + runLength(grid, r, c, -1, 0) - 1;
+      if (aLen < 3 || dLen < 3) count++;
+    }
+  }
+  return count;
+}
+
+function setChar(str, idx, ch) {
+  return str.substring(0, idx) + ch + str.substring(idx + 1);
+}
+
+function extractJson(text) {
+  if (!text) return { ok: false, error: 'Empty AI response.' };
+  let cleaned = text.replace(/```json|```/gi, '').trim();
+  try { return { ok: true, data: JSON.parse(cleaned) }; } catch {}
+  let depth = 0, start = -1, end = -1;
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned[i] === '{') { if (depth === 0) start = i; depth++; }
+    else if (cleaned[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (start >= 0 && end > start) {
+    try { return { ok: true, data: JSON.parse(cleaned.slice(start, end + 1)) }; }
+    catch (err) { return { ok: false, error: `JSON parse failed: ${err.message}` }; }
+  }
+  return { ok: false, error: 'No JSON object found in AI response.' };
 }
 
 function fallbackClue(answer, difficulty) {
