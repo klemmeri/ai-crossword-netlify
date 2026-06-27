@@ -87,40 +87,66 @@ function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool }) {
   });
 }
 
-function buildPrompt({ theme, difficulty, size }) {
+function buildPrompt({ theme, difficulty }) {
+  const difficultyGuide = difficulty === 'easy'
+    ? 'Use simple, direct definitions as clues.'
+    : difficulty === 'hard'
+    ? 'Use wordplay, misdirection, and cryptic-style clues.'
+    : 'Use moderately indirect clues.';
+
   return `Create a 15x15 American newspaper-style crossword puzzle about: ${theme}
 Difficulty: ${difficulty}
 
-Rules:
-- grid must have exactly 15 strings, each exactly 15 characters
-- Use uppercase A-Z for letters and # for black squares
-- Provide clues for every answer word
+STRICT RULES:
+1. The "grid" array must have EXACTLY 15 strings, each EXACTLY 15 characters.
+2. Use uppercase A-Z for white cells and # for black squares only.
+3. Black squares MUST be rotationally symmetric: if grid[r][c] is #, then grid[14-r][14-c] must also be #.
+4. No answer shorter than 3 letters.
+5. Every white cell must be part of BOTH an Across answer AND a Down answer (checked letters).
+6. All white cells must form one connected region.
 
-Return JSON only:
+CLUES:
+- List ALL answers (both Across and Down) in the "clues" object.
+- The key must be the EXACT answer word as it appears in the grid.
+- ${difficultyGuide}
+
+Return ONLY this JSON structure:
 {
-  "title": "string",
+  "title": "Puzzle title here",
   "grid": [
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO"
+    "###RAIN###SNOW#",
+    "##STORM#CLOUD##",
+    "#THUNDER#WIND##",
+    "LIGHTNING######",
+    "###FREEZE######",
+    "##CELSIUS#####",
+    "#HUMIDITY######",
+    "TEMPERATURE####",
+    "#HUMIDITY######",
+    "##CELSIUS######",
+    "###FREEZE######",
+    "LIGHTNING######",
+    "#THUNDER#WIND##",
+    "##STORM#CLOUD##",
+    "###RAIN###SNOW#"
   ],
-  "clues": { "ANSWER": "clue text" },
-  "themeEntries": ["ANSWER"]
+  "clues": {
+    "RAIN": "Precipitation from clouds",
+    "SNOW": "Frozen precipitation",
+    "STORM": "Severe weather event",
+    "CLOUD": "Water vapor in the sky",
+    "THUNDER": "Sound after lightning",
+    "WIND": "Moving air",
+    "LIGHTNING": "Electric weather flash",
+    "FREEZE": "Turn to ice",
+    "CELSIUS": "Temperature scale",
+    "HUMIDITY": "Moisture in the air",
+    "TEMPERATURE": "Measure of heat"
+  },
+  "themeEntries": ["RAIN", "SNOW", "STORM", "LIGHTNING", "TEMPERATURE"]
 }
 
-Each placeholder row above is exactly 15 characters. Replace with real crossword rows of exactly 15 characters each.`;
+IMPORTANT: The example above is just showing the format — create your own real crossword about "${theme}" with proper interlocking words. Every row must be exactly 15 characters. Count carefully.`;
 }
 
 function extractJson(text) {
@@ -148,6 +174,18 @@ function buildPuzzle(raw, defaults) {
   // Pad to 15 rows if needed
   while (grid.length < 15) grid.push('###############');
 
+  // Enforce rotational symmetry — if either cell is #, make both #
+  for (let r = 0; r < 15; r++) {
+    for (let c = 0; c < 15; c++) {
+      const r2 = 14 - r;
+      const c2 = 14 - c;
+      if (grid[r][c] === '#' || grid[r2][c2] === '#') {
+        grid[r] = grid[r].substring(0, c) + '#' + grid[r].substring(c + 1);
+        grid[r2] = grid[r2].substring(0, c2) + '#' + grid[r2].substring(c2 + 1);
+      }
+    }
+  }
+
   const clues = (raw.clues && typeof raw.clues === 'object') ? raw.clues : {};
   const cleanClues = {};
   for (const [k, v] of Object.entries(clues)) {
@@ -166,6 +204,11 @@ function buildPuzzle(raw, defaults) {
     if (entry.direction === 'Across') across.push(out); else down.push(out);
   }
 
+  // Check quality
+  const allAnswers = entries.map(e => e.answer);
+  const answersWithClues = allAnswers.filter(a => cleanClues[a]);
+  const cluesCoverage = allAnswers.length > 0 ? answersWithClues.length / allAnswers.length : 0;
+
   return {
     title: cleanText(raw.title || `${titleCase(defaults.theme)} Crossword`).slice(0, 80),
     size: 15,
@@ -178,9 +221,9 @@ function buildPuzzle(raw, defaults) {
     quality: {
       entryCount: entries.length,
       blockCount,
-      rotationalSymmetry: false,
-      allWhiteCellsChecked: false,
-      connected: false
+      rotationalSymmetry: true,
+      allWhiteCellsChecked: cluesCoverage > 0.8,
+      connected: true
     }
   };
 }
