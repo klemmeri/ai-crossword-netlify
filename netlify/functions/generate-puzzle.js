@@ -1,15 +1,13 @@
 // generate-puzzle.js — Netlify serverless function
-// Template-based approach: use pre-built grid templates, ask Claude to fill words and write clues
+// Single-pass with pre-built template: Claude fills words + clues in one call
 
 const https = require('https');
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
-// ── Pre-built 15x15 grid templates with rotational symmetry ──────
-// 0 = white cell, 1 = black square
+// Pre-built symmetric 15x15 templates (. = white, # = black)
 const TEMPLATES = [
-  // Template 1: Classic NYT-style open grid
   [
     "###.....#......",
     "##......#......",
@@ -27,25 +25,6 @@ const TEMPLATES = [
     "......#......##",
     "......#.....###"
   ],
-  // Template 2: Slightly denser
-  [
-    "###.....#....##",
-    "##......#...###",
-    "#.......#...###",
-    "...#...#...#...",
-    "....#......#...",
-    ".....#....#....",
-    "......#..#.....",
-    ".......##......",
-    ".....#..#......",
-    "....#....#.....",
-    "...#......#....",
-    "...#...#...#...",
-    "###...#......#.",
-    "###...#......##",
-    "##....#.....###"
-  ],
-  // Template 3: Open center
   [
     "##.....#.....##",
     "#......#......#",
@@ -62,12 +41,25 @@ const TEMPLATES = [
     ".......#.......",
     "#......#......#",
     "##.....#.....##"
+  ],
+  [
+    "####....#....##",
+    "###.....#...###",
+    "##......#...###",
+    "#...#.......#..",
+    "....#......#...",
+    ".....#....#....",
+    "......#..#.....",
+    ".......##......",
+    ".....##........",
+    "....#....#.....",
+    "...#......#....",
+    "..#.......#...#",
+    "###...#......##",
+    "###...#.....###",
+    "##....#....####"
   ]
 ];
-
-function templateToGrid(template) {
-  return template.map(row => row.replace(/\./g, 'A').replace(/#/g, '#'));
-}
 
 function pickTemplate() {
   return TEMPLATES[Math.floor(Math.random() * TEMPLATES.length)];
@@ -99,54 +91,34 @@ exports.handler = async (event) => {
   }
 
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-
-  // Pick a template and show Claude the black square pattern
   const template = pickTemplate();
-  const blackPattern = template; // rows of . and #
 
-  // ── PASS 1: Ask Claude to fill words into the template ───────
-  let fillText;
+  let aiText;
   try {
-    fillText = await callAnthropic(apiKey, model, buildFillPrompt({ theme, difficulty, blackPattern }));
+    aiText = await callAnthropic(apiKey, model, buildPrompt({ theme, difficulty, template }));
   } catch (err) {
-    return json(502, { error: `Fill error: ${err.message}` });
+    return json(502, { error: `AI error: ${err.message}` });
   }
 
-  const fillParsed = extractJson(fillText);
-  if (!fillParsed.ok) {
-    return json(422, { error: `Could not parse fill: ${fillParsed.error}` });
+  const parsed = extractJson(aiText);
+  if (!parsed.ok) {
+    return json(422, { error: `Could not parse response: ${parsed.error}` });
   }
 
-  // Merge filled letters with template black squares
-  let grid = mergeWithTemplate(fillParsed.data.grid || [], blackPattern);
-  const title = cleanText(fillParsed.data.title || `${titleCase(theme)} Crossword`).slice(0, 80);
-  const themeEntries = Array.isArray(fillParsed.data.themeEntries)
-    ? fillParsed.data.themeEntries.map(sanitizeAnswer).filter(Boolean)
-    : [];
+  // Merge Claude's filled grid with the template to enforce black squares
+  const grid = mergeWithTemplate(parsed.data.grid || [], template);
+  const title = cleanText(parsed.data.title || `${titleCase(theme)} Crossword`).slice(0, 80);
+  const themeEntries = Array.isArray(parsed.data.themeEntries)
+    ? parsed.data.themeEntries.map(sanitizeAnswer).filter(Boolean) : [];
 
-  const entries = extractEntries(grid);
-  if (entries.length === 0) {
-    return json(422, { error: 'No valid entries found in grid.' });
-  }
-
-  // ── PASS 2: Generate clues ───────────────────────────────────
-  const allAnswers = [...new Set(entries.map(e => e.answer))];
-  let clueText;
-  try {
-    clueText = await callAnthropic(apiKey, model, buildCluesPrompt({ theme, difficulty, answers: allAnswers }));
-  } catch (err) {
-    return json(502, { error: `Clue error: ${err.message}` });
-  }
-
-  const cluesParsed = extractJson(clueText);
-  const rawClues = (cluesParsed.ok && cluesParsed.data && typeof cluesParsed.data === 'object')
-    ? cluesParsed.data : {};
-
+  const rawClues = (parsed.data.clues && typeof parsed.data.clues === 'object')
+    ? parsed.data.clues : {};
   const cleanClues = {};
   for (const [k, v] of Object.entries(rawClues)) {
     cleanClues[sanitizeAnswer(k)] = cleanText(v).slice(0, 220);
   }
 
+  const entries = extractEntries(grid);
   const across = [], down = [];
   let blockCount = 0;
   for (const row of grid) for (const ch of row) if (ch === '#') blockCount++;
@@ -206,67 +178,58 @@ function callAnthropic(apiKey, model, prompt) {
   });
 }
 
-function buildFillPrompt({ theme, difficulty, blackPattern }) {
-  const patternStr = blackPattern.map((row, i) => `Row ${i+1}: ${row}`).join('\n');
-
-  return `Fill this 15x15 crossword grid template with words about: ${theme}
-Difficulty: ${difficulty}
-
-The black square pattern is fixed (do not change it):
-${patternStr}
-
-In the pattern: # = black square (keep as #), . = white cell (replace with a letter)
-
-Rules:
-- Replace every . with an uppercase letter A-Z to form real English words.
-- Keep every # exactly as # — do not change the black square positions.
-- Every sequence of letters between # marks must be a real English word.
-- Try to use words related to "${theme}" where possible.
-- Every row must be exactly 15 characters.
-
-Return ONLY this JSON:
-{
-  "title": "Theme-based title",
-  "grid": [
-    "###STORM##RAIN.",
-    "##THUNDER#CLOUD",
-    "... 13 more rows ..."
-  ],
-  "themeEntries": ["STORM", "THUNDER", "RAIN", "CLOUD"]
-}`;
-}
-
-function buildCluesPrompt({ theme, difficulty, answers }) {
+function buildPrompt({ theme, difficulty, template }) {
   const diffGuide = difficulty === 'easy'
     ? 'Simple, direct definitions.'
     : difficulty === 'hard'
     ? 'Clever wordplay and misdirection.'
     : 'Moderately indirect clues.';
 
-  const answerList = answers.map(a => `"${a}"`).join(', ');
+  const patternDisplay = template.map((row, i) =>
+    `  "${row}"  (row ${i+1})`
+  ).join('\n');
 
-  return `Write crossword clues for these words from a "${theme}" puzzle.
-Difficulty: ${difficulty} — ${diffGuide}
+  return `Create a 15x15 crossword puzzle about: ${theme}
+Difficulty: ${difficulty}
 
-Words: ${answerList}
+Use this exact black square pattern (# = black, . = white cell to fill with a letter):
+${patternDisplay}
 
-Rules:
-- One clue for EVERY word. No skipping.
-- Every clue must be unique.
-- 2-7 words per clue.
-- Never use the answer word in its clue.
-- Write real meaningful clues — never say "word fragment", "minus a letter", or "abbreviation".
-- Short common words: ACE="Serve winner", ERA="Time period", ORE="Mined material", NET="After taxes", ATE="Had a meal", DEW="Morning moisture", FOG="Thick mist", ICE="Frozen water", SKY="Above clouds", SUN="Daytime star", AIR="What we breathe", SEA="Ocean expanse", etc.
+YOUR TASK:
+1. Replace every . with an uppercase letter to form real English words.
+2. Keep every # exactly as # — do not move black squares.
+3. Try to include 4-6 words related to "${theme}".
+4. Use common short English words to fill gaps (ACE, ERA, ORE, ATE, etc.).
+5. Write a clue for every answer word that appears in the grid.
 
-Return ONLY JSON:
+CLUE RULES:
+- ${diffGuide}
+- Never use the answer word in its own clue.
+- Never write "anagram", "scrambled", "minus a letter", or "abbreviation code".
+- Short words: ACE="Serve winner", ERA="Time period", ORE="Mined material", ATE="Had a meal", DEW="Morning droplets", FOG="Thick mist", ICE="Frozen water", NET="After taxes".
+
+Return ONLY this JSON:
 {
-  "WORD": "Its clue",
-  "ANOTHER": "Its clue"
-}`;
+  "title": "Puzzle title about ${theme}",
+  "grid": [
+    "###HOMER##STEAL",
+    "##BASEBALL#MOUND",
+    "... 13 more rows, each exactly 15 chars ..."
+  ],
+  "clues": {
+    "HOMER": "Grand slam, for short",
+    "STEAL": "Swipe a base",
+    "BASEBALL": "America's pastime",
+    "MOUND": "Pitcher's platform",
+    "ERA": "Pitcher's stat"
+  },
+  "themeEntries": ["HOMER", "BASEBALL", "MOUND"]
+}
+
+Every row must be exactly 15 characters. # stays #, . becomes a letter.`;
 }
 
 function mergeWithTemplate(rawGrid, template) {
-  // Normalize the filled grid
   const filled = Array.isArray(rawGrid)
     ? rawGrid.slice(0, 15).map(row => {
         const r = String(row).toUpperCase().replace(/[^A-Z#]/g, '');
@@ -275,7 +238,6 @@ function mergeWithTemplate(rawGrid, template) {
     : [];
   while (filled.length < 15) filled.push('EEEEEEEEEEEEEEE');
 
-  // Apply template: wherever template has #, force #
   return template.map((tRow, r) => {
     let result = '';
     for (let c = 0; c < 15; c++) {
@@ -375,7 +337,6 @@ function fallbackClue(answer, difficulty) {
   return `${answer.length}-letter answer`;
 }
 
-function setChar(str, idx, ch) { return str.substring(0, idx) + ch + str.substring(idx + 1); }
 function sanitizeAnswer(value) { return String(value || '').toUpperCase().replace(/[^A-Z]/g, ''); }
 function cleanText(value)      { return String(value || '').replace(/[\u0000-\u001f<>]/g, ' ').replace(/\s+/g, ' ').trim(); }
 function titleCase(value)      { return cleanText(value).replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase()); }
