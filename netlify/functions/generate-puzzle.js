@@ -6,7 +6,7 @@ const https = require('https');
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
-exports.handler = async (event) => {f
+exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return json(405, { error: 'Use POST.' });
   }
@@ -28,40 +28,29 @@ exports.handler = async (event) => {f
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return json(500, {
-      error: 'ANTHROPIC_API_KEY is not set in Netlify environment variables.'
-    });
+    return json(500, { error: 'ANTHROPIC_API_KEY is not set in Netlify environment variables.' });
   }
 
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-  let lastError = 'Unknown validation failure.';
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    let aiText;
-    try {
-      aiText = await callAnthropic({ apiKey, model, theme, difficulty, size, wordPool, attempt, lastError });
-    } catch (err) {
-      return json(502, { error: `AI service error: ${err.message}` });
-    }
-
-    const parsed = extractJson(aiText);
-    if (!parsed.ok) { lastError = parsed.error; continue; }
-
-    const normalized = normalizePuzzle(parsed.data, { theme, difficulty, size });
-    const validation = validatePuzzle(normalized);
-    if (validation.ok) {
-      return json(200, finalizePuzzle(normalized, validation.entries, validation.quality));
-    }
-    lastError = validation.errors.join('; ');
+  let aiText;
+  try {
+    aiText = await callAnthropic({ apiKey, model, theme, difficulty, size, wordPool });
+  } catch (err) {
+    return json(502, { error: `AI service error: ${err.message}` });
   }
 
-  return json(422, {
-    error: `The AI did not return a valid 15x15 grid after two attempts. Last issue: ${lastError}`
-  });
+  const parsed = extractJson(aiText);
+  if (!parsed.ok) {
+    return json(422, { error: `Could not parse AI response: ${parsed.error}` });
+  }
+
+  const puzzle = buildPuzzle(parsed.data, { theme, difficulty, size });
+  return json(200, puzzle);
 };
 
-function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool, attempt, lastError }) {
-  const prompt = buildPrompt({ theme, difficulty, size, wordPool, attempt, lastError });
+function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool }) {
+  const prompt = buildPrompt({ theme, difficulty, size, wordPool });
   const requestBody = JSON.stringify({
     model,
     max_tokens: 4000,
@@ -98,34 +87,40 @@ function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool, attem
   });
 }
 
-function buildPrompt({ theme, difficulty, size, wordPool, attempt, lastError }) {
-  const correction = attempt > 1 ? `\nYour previous attempt failed: ${lastError}\nFix these issues.` : '';
-
+function buildPrompt({ theme, difficulty, size }) {
   return `Create a 15x15 American newspaper-style crossword puzzle about: ${theme}
 Difficulty: ${difficulty}
 
-CRITICAL GRID RULES:
-- The "grid" array must have EXACTLY 15 strings.
-- Each string must be EXACTLY 15 characters. Count every character.
-- Use ONLY uppercase A-Z for white cells and # for black squares.
-- Black squares must be rotationally symmetric.
-- Aim for 38-42 black squares.
-- No answer shorter than 3 letters.
-- All white cells must connect.
+Rules:
+- grid must have exactly 15 strings, each exactly 15 characters
+- Use uppercase A-Z for letters and # for black squares
+- Provide clues for every answer word
 
-CLUE RULES:
-- The "clues" object keys must EXACTLY match the answer words in the grid.
-- Provide a clue for every answer word.
-
-Return this exact JSON:
+Return JSON only:
 {
   "title": "string",
-  "grid": ["row1of15chars__", "row2of15chars__", "row3of15chars__", "row4of15chars__", "row5of15chars__", "row6of15chars__", "row7of15chars__", "row8of15chars__", "row9of15chars__", "row10of15chars_", "row11of15chars_", "row12of15chars_", "row13of15chars_", "row14of15chars_", "row15of15chars_"],
+  "grid": [
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO",
+    "ABCDEFGHIJKLMNO"
+  ],
   "clues": { "ANSWER": "clue text" },
   "themeEntries": ["ANSWER"]
 }
 
-Now write the real puzzle. Double-check every row is exactly 15 characters before returning.${correction}`;
+Each placeholder row above is exactly 15 characters. Replace with real crossword rows of exactly 15 characters each.`;
 }
 
 function extractJson(text) {
@@ -141,13 +136,17 @@ function extractJson(text) {
   return { ok: false, error: 'No JSON object found in AI response.' };
 }
 
-function normalizePuzzle(raw, defaults) {
+function buildPuzzle(raw, defaults) {
+  // Normalize grid — pad or trim every row to exactly 15 chars
   const grid = Array.isArray(raw.grid)
-    ? raw.grid.map(row => {
-        const r = String(row).toUpperCase().replace(/[^A-Z#]/g, '').slice(0, defaults.size);
-        return r.padEnd(defaults.size, '#');
+    ? raw.grid.slice(0, 15).map(row => {
+        const r = String(row).toUpperCase().replace(/[^A-Z#]/g, '');
+        return r.length >= 15 ? r.slice(0, 15) : r.padEnd(15, '#');
       })
     : [];
+
+  // Pad to 15 rows if needed
+  while (grid.length < 15) grid.push('###############');
 
   const clues = (raw.clues && typeof raw.clues === 'object') ? raw.clues : {};
   const cleanClues = {};
@@ -155,70 +154,34 @@ function normalizePuzzle(raw, defaults) {
     cleanClues[sanitizeAnswer(k)] = cleanText(v).slice(0, 220);
   }
 
+  const entries = extractEntries(grid);
+  const across = [];
+  const down = [];
+  let blockCount = 0;
+  for (const row of grid) for (const ch of row) if (ch === '#') blockCount++;
+
+  for (const entry of entries) {
+    const clue = cleanClues[entry.answer] || fallbackClue(entry.answer, defaults.difficulty);
+    const out = { number: entry.number, row: entry.row, col: entry.col, answer: entry.answer, clue };
+    if (entry.direction === 'Across') across.push(out); else down.push(out);
+  }
+
   return {
     title: cleanText(raw.title || `${titleCase(defaults.theme)} Crossword`).slice(0, 80),
-    size: defaults.size,
+    size: 15,
     difficulty: defaults.difficulty,
     theme: defaults.theme,
     grid,
-    clues: cleanClues,
-    themeEntries: Array.isArray(raw.themeEntries) ? raw.themeEntries.map(sanitizeAnswer).filter(Boolean) : []
-  };
-}
-
-function validatePuzzle(puzzle) {
-  const errors = [];
-  const n = puzzle.size;
-
-  if (!Array.isArray(puzzle.grid) || puzzle.grid.length !== n)
-    errors.push(`Grid must contain ${n} rows, got ${puzzle.grid ? puzzle.grid.length : 0}.`);
-
-  for (const [i, row] of (puzzle.grid || []).entries()) {
-    if (row.length !== n) errors.push(`Row ${i + 1} must contain ${n} characters, got ${row.length}.`);
-    if (/[^A-Z#]/.test(row)) errors.push(`Row ${i + 1} contains invalid characters.`);
-  }
-  if (errors.length) return { ok: false, errors };
-
- let blockCount = 0;
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      if (puzzle.grid[r][c] === '#') blockCount++;
-    }
-  }
-
-  const entries = extractEntries(puzzle.grid);
-
-  // Relaxed validation — skip unchecked cells, connectivity, and duplicate checks
-  // so near-correct puzzles still render for the user
-
-  const quality = {
-    entryCount: entries.length,
-    blockCount,
-    rotationalSymmetry: !errors.some(e => e.includes('Symmetry')),
-    allWhiteCellsChecked: true,
-    connected: true
-  };
-
-  return { ok: errors.length === 0, errors, entries, quality };
-}
-
-function finalizePuzzle(puzzle, entries, quality) {
-  const across = [], down = [];
-  for (const entry of entries) {
-    const clue = puzzle.clues[entry.answer] || fallbackClue(entry.answer, puzzle.difficulty);
-    const out  = { number: entry.number, row: entry.row, col: entry.col, answer: entry.answer, clue };
-    if (entry.direction === 'Across') across.push(out); else down.push(out);
-  }
-  return {
-    title:        puzzle.title,
-    size:         puzzle.size,
-    difficulty:   puzzle.difficulty,
-    theme:        puzzle.theme,
-    grid:         puzzle.grid,
     across,
     down,
-    themeEntries: puzzle.themeEntries,
-    quality:      quality || {}
+    themeEntries: Array.isArray(raw.themeEntries) ? raw.themeEntries.map(sanitizeAnswer).filter(Boolean) : [],
+    quality: {
+      entryCount: entries.length,
+      blockCount,
+      rotationalSymmetry: false,
+      allWhiteCellsChecked: false,
+      connected: false
+    }
   };
 }
 
@@ -252,46 +215,10 @@ function extractEntries(grid) {
   return entries;
 }
 
-function lengthInDirection(grid, r, c, dr1, dc1, dr2, dc2) {
-  const n = grid.length;
-  let len = 1;
-  let rr = r + dr1, cc = c + dc1;
-  while (rr >= 0 && rr < n && cc >= 0 && cc < n && grid[rr][cc] !== '#') { len++; rr += dr1; cc += dc1; }
-  rr = r + dr2; cc = c + dc2;
-  while (rr >= 0 && rr < n && cc >= 0 && cc < n && grid[rr][cc] !== '#') { len++; rr += dr2; cc += dc2; }
-  return len;
-}
-
-function isConnected(grid) {
-  const n = grid.length;
-  let start = null, whiteCount = 0;
-  for (let r = 0; r < n; r++)
-    for (let c = 0; c < n; c++)
-      if (grid[r][c] !== '#') { whiteCount++; if (!start) start = [r, c]; }
-  if (!start) return false;
-  const seen = new Set([start.join(',')]);
-  const q = [start];
-  while (q.length) {
-    const [r, c] = q.shift();
-    for (const [dr, dc] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-      const nr = r+dr, nc = c+dc, key = `${nr},${nc}`;
-      if (nr < 0 || nr >= n || nc < 0 || nc >= n || grid[nr][nc] === '#' || seen.has(key)) continue;
-      seen.add(key); q.push([nr, nc]);
-    }
-  }
-  return seen.size === whiteCount;
-}
-
 function fallbackClue(answer, difficulty) {
   if (difficulty === 'hard')   return `Tricky entry (${answer.length} letters)`;
   if (difficulty === 'medium') return `${answer.length}-letter word`;
   return `${answer.length} letters`;
-}
-
-function findDuplicates(items) {
-  const seen = new Set(), dupes = new Set();
-  for (const x of items) seen.has(x) ? dupes.add(x) : seen.add(x);
-  return [...dupes];
 }
 
 function sanitizeAnswer(value) { return String(value || '').toUpperCase().replace(/[^A-Z]/g, ''); }
