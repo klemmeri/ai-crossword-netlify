@@ -31,7 +31,7 @@ exports.handler = async (event) => {
     return json(500, { error: 'ANTHROPIC_API_KEY is not set in Netlify environment variables.' });
   }
 
-  const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+  const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
   let aiText;
   try {
@@ -97,12 +97,10 @@ function buildPrompt({ theme, difficulty }) {
   return `Create a 15x15 American newspaper-style crossword puzzle about: ${theme}
 Difficulty: ${difficulty}
 
-GRID APPEARANCE — very important:
-- A standard newspaper crossword has mostly WHITE cells with scattered black squares.
-- Use NO MORE THAN 38 black squares total (about 17% of the grid).
-- Black squares should be spread evenly — NEVER create large black regions or touching blocks.
-- Black squares typically appear as single isolated squares or pairs, not clusters.
-- The grid should look open and airy, not dark and blocked.
+GRID APPEARANCE:
+- Use NO MORE THAN 38 black squares (#). The grid should be mostly white cells with words.
+- Black squares should be spread out as single isolated squares, never in large clusters.
+- A good newspaper crossword looks open and airy with lots of white space.
 
 GRID RULES:
 - EXACTLY 15 rows, each EXACTLY 15 characters.
@@ -111,16 +109,10 @@ GRID RULES:
 - Every white cell must cross both an Across AND a Down word of 3+ letters.
 - No word shorter than 3 letters.
 
-CLUES — critical:
-- You MUST provide a clue for EVERY answer in the grid, both Across and Down.
-- Do not skip any answers. If there are 70 answers, there must be 70 clues.
-- Key = exact uppercase answer word. Value = clue text.
+CLUES:
+- Provide a clue for EVERY answer — both Across and Down words.
+- Key = exact uppercase answer. Value = clue text.
 - ${diffGuide}
-
-Here is an example of a good open grid pattern (use # sparingly):
-"FROSTBITEWINDS"  <- mostly letters
-"R##A##I##N##C#"  <- scattered single #
-"EATHER#CLIMATE"  <- open runs of letters
 
 Return ONLY this JSON:
 {
@@ -128,15 +120,28 @@ Return ONLY this JSON:
   "grid": [
     "ABCDE#FGHIJ#KLM",
     "N#OPQ#RSTUV#WXY",
-    ... 13 more rows of exactly 15 chars ...
+    "ZABCD#EFGHI#JKL",
+    "MNO#PQRSTUVWXY#",
+    "ZABCDEFG#HIJKLM",
+    "#NOPQRST#UVWXYZ",
+    "ABCDE#FGHIJ#KLM",
+    "NOPQR#STUVW#XYZ",
+    "ABCDE#FGHIJ#KLM",
+    "#NOPQRST#UVWXYZ",
+    "ZABCDEFG#HIJKLM",
+    "MNO#PQRSTUVWXY#",
+    "ZABCD#EFGHI#JKL",
+    "N#OPQ#RSTUV#WXY",
+    "ABCDE#FGHIJ#KLM"
   ],
   "clues": {
-    "EVERY": "clue for every answer",
-    "SINGLE": "clue for single",
-    "ANSWER": "clue for answer"
+    "EVERYACROSSWORD": "clue text",
+    "EVERYDOWNWORD": "clue text"
   },
   "themeEntries": ["THEME", "WORDS"]
-}`;
+}
+
+The example grid above shows the FORMAT only — replace every row with real crossword words about "${theme}". Each row must be exactly 15 characters.`;
 }
 
 function extractJson(text) {
@@ -175,26 +180,6 @@ function buildPuzzle(raw, defaults) {
     }
   }
 
-  // Fix unchecked cells by blacking them out
-  let changed = true;
-  let passes = 0;
-  while (changed && passes < 10) {
-    changed = false;
-    passes++;
-    for (let r = 0; r < 15; r++) {
-      for (let c = 0; c < 15; c++) {
-        if (grid[r][c] === '#') continue;
-        const aLen = runLength(grid, r, c, 0, 1) + runLength(grid, r, c, 0, -1) - 1;
-        const dLen = runLength(grid, r, c, 1, 0) + runLength(grid, r, c, -1, 0) - 1;
-        if (aLen < 3 || dLen < 3) {
-          grid[r]    = setChar(grid[r],    c,    '#');
-          grid[14-r] = setChar(grid[14-r], 14-c, '#');
-          changed = true;
-        }
-      }
-    }
-  }
-
   // Build clue lookup
   const rawClues = (raw.clues && typeof raw.clues === 'object') ? raw.clues : {};
   const cleanClues = {};
@@ -202,7 +187,7 @@ function buildPuzzle(raw, defaults) {
     cleanClues[sanitizeAnswer(k)] = cleanText(v).slice(0, 220);
   }
 
-  // Extract entries
+  // Extract entries and match clues
   const entries = extractEntries(grid);
   const across = [], down = [];
   let blockCount = 0;
