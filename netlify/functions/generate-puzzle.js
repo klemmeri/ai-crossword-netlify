@@ -151,17 +151,34 @@ IMPORTANT: The example above is just showing the format — create your own real
 
 function extractJson(text) {
   if (!text) return { ok: false, error: 'Empty AI response.' };
-  const cleaned = text.replace(/```json|```/gi, '').trim();
+  
+  // Remove markdown fences
+  let cleaned = text.replace(/```json|```/gi, '').trim();
+  
+  // Try direct parse first
   try { return { ok: true, data: JSON.parse(cleaned) }; } catch {}
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
+  
+  // Find the outermost { } block
+  let depth = 0;
+  let start = -1;
+  let end = -1;
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned[i] === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (cleaned[i] === '}') {
+      depth--;
+      if (depth === 0) { end = i; break; }
+    }
+  }
+  
   if (start >= 0 && end > start) {
     try { return { ok: true, data: JSON.parse(cleaned.slice(start, end + 1)) }; }
     catch (err) { return { ok: false, error: `JSON parse failed: ${err.message}` }; }
   }
+  
   return { ok: false, error: 'No JSON object found in AI response.' };
 }
-
 function buildPuzzle(raw, defaults) {
   // Normalize grid — pad or trim every row to exactly 15 chars
   const grid = Array.isArray(raw.grid)
