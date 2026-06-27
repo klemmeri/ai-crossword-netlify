@@ -60,7 +60,7 @@ exports.handler = async (event) => {
   }
 
   // ── PASS 2: Generate clues for all answers ───────────────────
-  const allAnswers = entries.map(e => e.answer);
+  const allAnswers = [...new Set(entries.map(e => e.answer))]; // unique answers
   let clueText;
   try {
     clueText = await callAnthropic(apiKey, model, buildCluesPrompt({ theme, difficulty, answers: allAnswers }));
@@ -162,60 +162,53 @@ GRID RULES:
 - Use NO MORE THAN 40 black squares total — keep the grid open and airy.
 - Every white cell must cross both an Across AND a Down word of 3+ letters.
 - No word shorter than 3 letters.
+- Use only real English words that can be clued — no random letter strings.
 - Include 4-6 theme-related words about "${theme}".
 
-Return ONLY this JSON (no clues needed yet — just the grid):
+Return ONLY this JSON (no clues needed — just the grid):
 {
   "title": "Puzzle title here",
   "grid": [
     "STORM##RAINFALL",
     "HURRICANE#CLOUD",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO",
-    "ABCDEFGHIJKLMNO"
+    "...13 more rows of exactly 15 chars..."
   ],
   "themeEntries": ["STORM", "RAINFALL", "HURRICANE", "CLOUD"]
 }
 
-Every row must be exactly 15 characters. Count carefully.`;
+Every row must be exactly 15 characters. Use only real words.`;
 }
 
 function buildCluesPrompt({ theme, difficulty, answers }) {
   const diffGuide = difficulty === 'easy'
-    ? 'Use simple, direct definitions.'
+    ? 'Use simple, direct definitions that any adult would know.'
     : difficulty === 'hard'
-    ? 'Use wordplay and misdirection.'
-    : 'Use moderately indirect clues.';
+    ? 'Use wordplay, double meanings, and misdirection.'
+    : 'Use clear but moderately indirect clues.';
 
-  const answerList = answers.join(', ');
+  const answerList = answers.map(a => `"${a}"`).join(', ');
 
-  return `Write crossword clues for these answers from a "${theme}" themed puzzle.
+  return `Write crossword puzzle clues for these answer words from a "${theme}" themed puzzle.
 Difficulty: ${difficulty} — ${diffGuide}
 
-Answers to clue: ${answerList}
+Answer words: ${answerList}
 
-Rules:
-- Write a clue for EVERY answer listed above. Do not skip any.
-- Keep clues concise (under 10 words each).
+Instructions:
+- Write one clue for EVERY word listed above. Do not skip any.
+- Every clue must be different — no duplicate clues.
+- Keep each clue under 8 words.
 - Do not use the answer word in its own clue.
-- For common words unrelated to the theme, write a general knowledge clue.
+- For short common words (ERA, NET, ACE, ONE, etc.), write standard crossword clues like "Historical period", "Tennis barrier", "Serves perfectly", "Single".
+- For theme-related words, reference "${theme}" in the clue when natural.
+- Never write clues like "letter fragment", "scrambled letters", or "abbreviation" — always give a real meaningful clue.
 
-Return ONLY a JSON object where each key is an answer word and the value is its clue:
+Return ONLY a JSON object with every answer as a key:
 {
   "STORM": "Violent weather disturbance",
-  "RAIN": "Precipitation from clouds",
-  "WIND": "Moving air",
-  ... one entry for every answer ...
+  "ERA": "Historical period",
+  "NET": "Tennis court divider",
+  "ACE": "Serve that wins the point",
+  ... one entry for every answer word ...
 }`;
 }
 
@@ -315,7 +308,31 @@ function extractJson(text) {
 }
 
 function fallbackClue(answer, difficulty) {
-  if (difficulty === 'hard')   return `Tricky entry (${answer.length} letters)`;
+  const common = {
+    'THE': 'Definite article', 'AND': 'Plus', 'FOR': 'In favor of',
+    'ARE': 'Exist', 'BUT': 'However', 'NOT': 'Negation word',
+    'YOU': 'Second person', 'ALL': 'Everything', 'CAN': 'Is able to',
+    'HER': 'Belonging to her', 'WAS': 'Past tense of be',
+    'ONE': 'Single', 'OUR': 'Belonging to us', 'OUT': 'Not in',
+    'DAY': 'Twenty-four hours', 'GET': 'Obtain', 'HAS': 'Possesses',
+    'HIM': 'Male pronoun', 'HIS': 'Male possessive', 'HOW': 'In what way',
+    'ITS': 'Belonging to it', 'NEW': 'Not old', 'NOW': 'At this moment',
+    'OLD': 'Not new', 'SEE': 'Observe', 'TWO': 'One plus one',
+    'WHO': 'Which person', 'BOY': 'Young male', 'DID': 'Past of do',
+    'ITS': 'Possessive pronoun', 'LET': 'Allow', 'PUT': 'Place',
+    'SAY': 'Utter', 'SHE': 'Female pronoun', 'TOO': 'Also',
+    'USE': 'Employ', 'WAY': 'Path or method', 'ACE': 'Tennis winner',
+    'ERA': 'Historical period', 'NET': 'After deductions',
+    'ORE': 'Mined mineral', 'ATE': 'Consumed food', 'EAT': 'Consume',
+    'ICE': 'Frozen water', 'SKY': 'Above the clouds',
+    'SUN': 'Star at center of solar system', 'AIR': 'What we breathe',
+    'FOG': 'Low-lying cloud', 'DEW': 'Morning moisture',
+    'ELM': 'Shade tree', 'OAK': 'Acorn producer',
+    'APE': 'Large primate', 'ANT': 'Picnic pest',
+    'EEL': 'Slippery fish', 'EMU': 'Australian bird',
+  };
+  if (common[answer]) return common[answer];
+  if (difficulty === 'hard') return `Tricky entry (${answer.length} letters)`;
   if (difficulty === 'medium') return `${answer.length}-letter word`;
   return `${answer.length} letters`;
 }
