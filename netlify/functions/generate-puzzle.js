@@ -162,9 +162,8 @@ function extractJson(text) {
 
 function normalizePuzzle(raw, defaults) {
   const grid = Array.isArray(raw.grid)
-    ? raw.grid.map(row => String(row).toUpperCase().replace(/[^A-Z#]/g, '').slice(0, defaults.size))
+    ? raw.grid.map(row => { const r = String(row).toUpperCase().replace(/[^A-Z#]/g, '').slice(0, defaults.size); return r.padEnd(defaults.size, '#'); })
     : [];
-
   const clues = (raw.clues && typeof raw.clues === 'object') ? raw.clues : {};
   const cleanClues = {};
   for (const [k, v] of Object.entries(clues)) {
