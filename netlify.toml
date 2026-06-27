@@ -4,3 +4,4 @@
 
 [functions]
   node_bundler = "nft"
+  timeout = 30
