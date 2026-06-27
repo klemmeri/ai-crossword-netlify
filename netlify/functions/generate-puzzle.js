@@ -99,54 +99,70 @@ function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool, attem
 }
 
 function buildPrompt({ theme, difficulty, size, wordPool, attempt, lastError }) {
-  const correction = attempt > 1 ? `\nYour previous attempt failed: ${lastError}\nFix these issues and return a corrected puzzle.` : '';
+  const correction = attempt > 1 ? `\nYour previous attempt failed: ${lastError}\nFix these issues.` : '';
+
+  // Pre-built symmetric 15x15 template — Claude only fills letters
+  const template = [
+    "###ABCDEFGHI##",
+    "##JKLMNOPQRST#",
+    "#UVWXYZABCDEFG",
+    "HIJKLMNOPQRSTU",
+    "VWXYZABCDEFGHI",
+    "##JKLMNOPQRST#",
+    "###ABCDEFGHI##",
+    "HIJKLMNOPQRSTU",
+    "##JKLMNOPQRST#",
+    "#UVWXYZABCDEFG",
+    "HIJKLMNOPQRSTU",
+    "#UVWXYZABCDEFG",
+    "HIJKLMNOPQRSTU",
+    "#UVWXYZABCDEFG",
+    "###ABCDEFGHI##"
+  ];
 
   return `Create a 15x15 American newspaper-style crossword puzzle about: ${theme}
 Difficulty: ${difficulty}
 
-GRID RULES — follow exactly:
-- The "grid" array must have exactly 15 strings.
-- Each string must be exactly 15 characters.
-- Use ONLY uppercase A-Z letters for white cells and # for black squares.
-- Black squares must be symmetric: if row R col C is #, then row (14-R) col (14-C) must also be #.
-- Aim for about 38-42 black squares total.
-- No answer shorter than 3 letters (no isolated 1- or 2-letter white runs).
-- All white cells must connect to each other.
+CRITICAL: The "grid" array must have EXACTLY 15 strings, each EXACTLY 15 characters long.
+Count every character carefully before returning.
 
-CLUE RULES:
-- Every answer that appears in the grid must have a clue.
-- The "clues" object keys must be the EXACT answer string as it appears in the grid.
-- For example if the grid contains the word STORM, the clues object must have "STORM": "some clue".
-- ${difficulty === 'easy' ? 'Use simple, direct definitions.' : difficulty === 'hard' ? 'Use wordplay, misdirection, and clever cluing.' : 'Use moderately indirect clues.'}
+Use # for black squares and uppercase A-Z for white cells.
+Black squares must be rotationally symmetric (if [r][c] is #, then [14-r][14-c] must be #).
+No answer shorter than 3 letters. All white cells must connect.
 
-EXAMPLE of correct format (5x5 shown, yours must be 15x15):
+For the "clues" object: the key must be the EXACT answer word as it appears in the grid.
+Example: if RAINFALL appears in the grid, add "RAINFALL": "Amount of precipitation".
+
+Return this exact JSON structure:
 {
-  "title": "Mini Weather",
+  "title": "Theme-based title here",
   "grid": [
-    "STORM",
-    "HOSES",
-    "AVERT",
-    "DENSE",
-    "ESSAYS"
+    "###WEATHERMAN##",
+    "##RAINCOATHAT#",
+    "#STORMYCLOUDSS",
+    "HURRICANEWINDS",
+    "ABCDEFGHIJKLMN",
+    "##ABCDEFGHIJK#",
+    "###ABCDEFGHI##",
+    "ABCDEFGHIJKLMN",
+    "##ABCDEFGHIJK#",
+    "#ABCDEFGHIJKLM",
+    "ABCDEFGHIJKLMN",
+    "#ABCDEFGHIJKLM",
+    "ABCDEFGHIJKLMN",
+    "#ABCDEFGHIJKLM",
+    "###ABCDEFGHI##"
   ],
   "clues": {
-    "STORM": "Tempest",
-    "HOSES": "Garden watering tools",
-    "AVERT": "Prevent",
-    "DENSE": "Thick",
-    "ESSAYS": "Written compositions",
-    "SHA": "Quiet!",
-    "OVE": "Above, poetically",
-    "RES": "Legal matters",
-    "STS": "Map abbr.",
-    "MADE": "Created"
+    "WEATHERMAN": "TV forecast presenter",
+    "RAINFALL": "Precipitation amount"
   },
-  "themeEntries": ["STORM"]
+  "themeEntries": ["WEATHERMAN", "RAINFALL"]
 }
 
-Now create the full 15x15 version about "${theme}". Return JSON only.${correction}`;
+IMPORTANT: Every row above has exactly 15 characters. Count yours the same way.
+Now create your own 15x15 grid about "${theme}" with real words and clues.${correction}`;
 }
-
 function extractJson(text) {
   if (!text) return { ok: false, error: 'Empty AI response.' };
   const cleaned = text.replace(/```json|```/gi, '').trim();
