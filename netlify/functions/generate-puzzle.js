@@ -99,38 +99,52 @@ function callAnthropic({ apiKey, model, theme, difficulty, size, wordPool, attem
 }
 
 function buildPrompt({ theme, difficulty, size, wordPool, attempt, lastError }) {
-  const correction = attempt > 1 ? `\nYour previous grid failed validation: ${lastError}\nReturn a corrected puzzle only.` : '';
-  return `Create a valid ${size}x${size} American newspaper-style crossword puzzle.
+  const correction = attempt > 1 ? `\nYour previous attempt failed: ${lastError}\nFix these issues and return a corrected puzzle.` : '';
 
-Theme or genre: ${theme}
+  return `Create a 15x15 American newspaper-style crossword puzzle about: ${theme}
 Difficulty: ${difficulty}
-Target word-pool size: ${wordPool}
 
-Mandatory grid rules:
-- Return exactly ${size} rows in the "grid" array.
-- Each row must contain exactly ${size} characters.
-- Use uppercase A-Z letters and # for black squares only.
-- Black squares must have 180-degree rotational symmetry.
-- Every answer must be at least 3 letters long.
-- Every white cell must be checked (part of both an Across and a Down answer, each at least 3 letters).
-- All white cells must form one connected region.
-- Use 3-5 theme-related entries where possible.
-- Avoid abbreviations, partials, or nonsense fill.
+GRID RULES — follow exactly:
+- The "grid" array must have exactly 15 strings.
+- Each string must be exactly 15 characters.
+- Use ONLY uppercase A-Z letters for white cells and # for black squares.
+- Black squares must be symmetric: if row R col C is #, then row (14-R) col (14-C) must also be #.
+- Aim for about 38-42 black squares total.
+- No answer shorter than 3 letters (no isolated 1- or 2-letter white runs).
+- All white cells must connect to each other.
 
-Clue rules:
-- Provide a clue for every Across and Down answer.
-- Easy = direct definitions. Medium = mildly indirect. Hard = wordplay or specialized knowledge.
-- Never reveal the answer in the clue.
+CLUE RULES:
+- Every answer that appears in the grid must have a clue.
+- The "clues" object keys must be the EXACT answer string as it appears in the grid.
+- For example if the grid contains the word STORM, the clues object must have "STORM": "some clue".
+- ${difficulty === 'easy' ? 'Use simple, direct definitions.' : difficulty === 'hard' ? 'Use wordplay, misdirection, and clever cluing.' : 'Use moderately indirect clues.'}
 
-Return JSON only, in exactly this shape:
+EXAMPLE of correct format (5x5 shown, yours must be 15x15):
 {
-  "title": "string",
-  "grid": ["ABCDEFGHIJKLMNO", "...14 more rows..."],
-  "clues": { "ANSWER": "clue text" },
-  "themeEntries": ["ANSWER", "ANSWER"]
+  "title": "Mini Weather",
+  "grid": [
+    "STORM",
+    "HOSES",
+    "AVERT",
+    "DENSE",
+    "ESSAYS"
+  ],
+  "clues": {
+    "STORM": "Tempest",
+    "HOSES": "Garden watering tools",
+    "AVERT": "Prevent",
+    "DENSE": "Thick",
+    "ESSAYS": "Written compositions",
+    "SHA": "Quiet!",
+    "OVE": "Above, poetically",
+    "RES": "Legal matters",
+    "STS": "Map abbr.",
+    "MADE": "Created"
+  },
+  "themeEntries": ["STORM"]
 }
 
-The app renumbers entries automatically, so clue keys must be raw uppercase answer strings.${correction}`;
+Now create the full 15x15 version about "${theme}". Return JSON only.${correction}`;
 }
 
 function extractJson(text) {
@@ -147,12 +161,16 @@ function extractJson(text) {
 }
 
 function normalizePuzzle(raw, defaults) {
-  const grid = Array.isArray(raw.grid) ? raw.grid.map(row => String(row).toUpperCase().replace(/[^A-Z#]/g, '').slice(0, defaults.size)) : [];
+  const grid = Array.isArray(raw.grid)
+    ? raw.grid.map(row => String(row).toUpperCase().replace(/[^A-Z#]/g, '').slice(0, defaults.size))
+    : [];
+
   const clues = (raw.clues && typeof raw.clues === 'object') ? raw.clues : {};
   const cleanClues = {};
   for (const [k, v] of Object.entries(clues)) {
     cleanClues[sanitizeAnswer(k)] = cleanText(v).slice(0, 220);
   }
+
   return {
     title: cleanText(raw.title || `${titleCase(defaults.theme)} Crossword`).slice(0, 80),
     size: defaults.size,
@@ -167,9 +185,12 @@ function normalizePuzzle(raw, defaults) {
 function validatePuzzle(puzzle) {
   const errors = [];
   const n = puzzle.size;
-  if (!Array.isArray(puzzle.grid) || puzzle.grid.length !== n) errors.push(`Grid must contain ${n} rows.`);
+
+  if (!Array.isArray(puzzle.grid) || puzzle.grid.length !== n)
+    errors.push(`Grid must contain ${n} rows, got ${puzzle.grid ? puzzle.grid.length : 0}.`);
+
   for (const [i, row] of (puzzle.grid || []).entries()) {
-    if (row.length !== n) errors.push(`Row ${i + 1} must contain ${n} characters.`);
+    if (row.length !== n) errors.push(`Row ${i + 1} must contain ${n} characters, got ${row.length}.`);
     if (/[^A-Z#]/.test(row)) errors.push(`Row ${i + 1} contains invalid characters.`);
   }
   if (errors.length) return { ok: false, errors };
@@ -180,25 +201,29 @@ function validatePuzzle(puzzle) {
       const a = puzzle.grid[r][c];
       const b = puzzle.grid[n - 1 - r][n - 1 - c];
       if (a === '#') blockCount++;
-      if ((a === '#') !== (b === '#')) errors.push(`Symmetry fails at row ${r + 1}, col ${c + 1}.`);
+      if ((a === '#') !== (b === '#'))
+        errors.push(`Symmetry fails at row ${r + 1}, col ${c + 1}.`);
     }
   }
 
   const entries = extractEntries(puzzle.grid);
   for (const entry of entries) {
-    if (entry.answer.length < 3) errors.push(`${entry.direction} ${entry.number} is shorter than 3 letters.`);
+    if (entry.answer.length < 3)
+      errors.push(`${entry.direction} ${entry.number} is shorter than 3 letters.`);
   }
 
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
       if (puzzle.grid[r][c] === '#') continue;
       const acrossLen = lengthInDirection(puzzle.grid, r, c, 0, -1, 0, 1);
-      const downLen = lengthInDirection(puzzle.grid, r, c, -1, 0, 1, 0);
-      if (acrossLen < 3 || downLen < 3) errors.push(`Unchecked cell at row ${r + 1}, col ${c + 1}.`);
+      const downLen   = lengthInDirection(puzzle.grid, r, c, -1, 0, 1, 0);
+      if (acrossLen < 3 || downLen < 3)
+        errors.push(`Unchecked cell at row ${r + 1}, col ${c + 1}.`);
     }
   }
 
   if (!isConnected(puzzle.grid)) errors.push('White cells are not all connected.');
+
   const dupes = findDuplicates(entries.map(e => e.answer));
   if (dupes.length) errors.push(`Duplicate answers: ${dupes.join(', ')}.`);
 
@@ -217,19 +242,19 @@ function finalizePuzzle(puzzle, entries, quality) {
   const across = [], down = [];
   for (const entry of entries) {
     const clue = puzzle.clues[entry.answer] || fallbackClue(entry.answer, puzzle.difficulty);
-    const out = { number: entry.number, row: entry.row, col: entry.col, answer: entry.answer, clue };
+    const out  = { number: entry.number, row: entry.row, col: entry.col, answer: entry.answer, clue };
     if (entry.direction === 'Across') across.push(out); else down.push(out);
   }
   return {
-    title: puzzle.title,
-    size: puzzle.size,
-    difficulty: puzzle.difficulty,
-    theme: puzzle.theme,
-    grid: puzzle.grid,
+    title:        puzzle.title,
+    size:         puzzle.size,
+    difficulty:   puzzle.difficulty,
+    theme:        puzzle.theme,
+    grid:         puzzle.grid,
     across,
     down,
     themeEntries: puzzle.themeEntries,
-    quality: quality || {}
+    quality:      quality || {}
   };
 }
 
@@ -238,14 +263,16 @@ function extractEntries(grid) {
   const entries = [];
   let number = 1;
   const starts = [];
+
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
       if (grid[r][c] === '#') continue;
       const startsAcross = (c === 0 || grid[r][c-1] === '#') && c+2 < n && grid[r][c+1] !== '#' && grid[r][c+2] !== '#';
-      const startsDown = (r === 0 || grid[r-1][c] === '#') && r+2 < n && grid[r+1][c] !== '#' && grid[r+2][c] !== '#';
+      const startsDown   = (r === 0 || grid[r-1][c] === '#') && r+2 < n && grid[r+1][c] !== '#' && grid[r+2][c] !== '#';
       if (startsAcross || startsDown) starts.push({ r, c, number: number++ });
     }
   }
+
   for (const s of starts) {
     if (s.c === 0 || grid[s.r][s.c-1] === '#') {
       let ans = '', c = s.c;
@@ -292,8 +319,8 @@ function isConnected(grid) {
 }
 
 function fallbackClue(answer, difficulty) {
-  if (difficulty === 'hard') return `Entry clued by the constructor (${answer.length})`;
-  if (difficulty === 'medium') return `${answer.length}-letter crossword entry`;
+  if (difficulty === 'hard')   return `Tricky entry (${answer.length} letters)`;
+  if (difficulty === 'medium') return `${answer.length}-letter word`;
   return `${answer.length} letters`;
 }
 
@@ -304,7 +331,9 @@ function findDuplicates(items) {
 }
 
 function sanitizeAnswer(value) { return String(value || '').toUpperCase().replace(/[^A-Z]/g, ''); }
-function cleanText(value) { return String(value || '').replace(/[\u0000-\u001f<>]/g, ' ').replace(/\s+/g, ' ').trim(); }
-function titleCase(value) { return cleanText(value).replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase()); }
-function clamp(n, min, max) { return Math.max(min, Math.min(max, Number.isFinite(n) ? n : min)); }
-function json(statusCode, body) { return { statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }; }
+function cleanText(value)      { return String(value || '').replace(/[\u0000-\u001f<>]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function titleCase(value)      { return cleanText(value).replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase()); }
+function clamp(n, min, max)    { return Math.max(min, Math.min(max, Number.isFinite(n) ? n : min)); }
+function json(statusCode, body) {
+  return { statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
+}
